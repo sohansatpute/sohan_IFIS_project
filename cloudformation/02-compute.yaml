@@ -262,7 +262,7 @@ Resources:
           timedatectl set-timezone Asia/Kolkata
 
           # Install required packages
-          dnf install -y amazon-cloudwatch-agent jq unzip wget curl
+          dnf install -y amazon-cloudwatch-agent jq unzip wget
 
           # Ensure SSM Agent is enabled and running
           systemctl enable amazon-ssm-agent
