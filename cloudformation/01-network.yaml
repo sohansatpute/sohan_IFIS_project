@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  IFIS AWS Infrastructure POC - Network Stack.
+  Creates a new private subnet, private route table, and NAT Gateway
+  within an existing VPC. Existing VPC and public subnet are referenced
+  and are not modified.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Existing Network Configuration
+        Parameters:
+          - ExistingVpcId
+          - ExistingPublicSubnetId
+          - AvailabilityZone
+
+      - Label:
+          default: Private Network Configuration
+        Parameters:
+          - PrivateSubnetCidr
+          - EnableNatGateway
+
+      - Label:
+          default: Project Information
+        Parameters:
+          - ProjectName
+          - Environment
+          - Owner
+
+Parameters:
+
+  ExistingVpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC where the POC network resources will be created.
+
+  ExistingPublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing public subnet where the NAT Gateway will be created.
+
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: Availability Zone for the new private subnet.
+
+  PrivateSubnetCidr:
+    Type: String
+    Description: CIDR block for the new private subnet.
+
+  EnableNatGateway:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Create the NAT Gateway and private subnet default route.
+
+  ProjectName:
+    Type: String
+    Default: IFIS-POC
+    Description: Project name used for resource tagging.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - uat
+      - prod
+    Description: Deployment environment.
+
+  Owner:
+    Type: String
+    Default: Sohan
+    Description: Resource owner.
+
+Conditions:
+
+  CreateNatGateway: !Equals
+    - !Ref EnableNatGateway
+    - "true"
+
+Resources:
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ExistingVpcId
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: !Ref PrivateSubnetCidr
+      MapPublicIpOnLaunch: false
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PrivateSubnet"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ExistingVpcId
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PrivateRouteTable"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  PrivateSubnetAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet
+
+  NatEIP:
+    Type: AWS::EC2::EIP
+    Condition: CreateNatGateway
+    Properties:
+      Domain: vpc
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-NatEIP"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: CreateNatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId
+      ConnectivityType: public
+      SubnetId: !Ref ExistingPublicSubnetId
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-NatGateway"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Condition: CreateNatGateway
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+Outputs:
+
+  PrivateSubnetId:
+    Description: ID of the new private subnet.
+    Value: !Ref PrivateSubnet
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnetId"
+
+  PrivateRouteTableId:
+    Description: ID of the private route table.
+    Value: !Ref PrivateRouteTable
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateRouteTableId"
+
+  NatGatewayId:
+    Condition: CreateNatGateway
+    Description: ID of the NAT Gateway.
+    Value: !Ref NatGateway
+    Export:
+      Name: !Sub "${AWS::StackName}-NatGatewayId"
+
+  VpcId:
+    Description: Existing VPC ID.
+    Value: !Ref ExistingVpcId
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcId"
