@@ -1,0 +1,23 @@
+# AWS credentials / sensitive files
+.aws/
+*.pem
+*.key
+.env
+.env.*
+secrets/
+
+# Terraform state, if ever used
+*.tfstate
+*.tfstate.*
+
+# IDE
+.vscode/
+.idea/
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Logs / temporary files
+*.log
+*.tmp
