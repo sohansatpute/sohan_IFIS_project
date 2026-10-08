@@ -1,25 +1,23 @@
-# IFIS POC – Manual AWS Console Deployment Guide
+# IFIS POC – Manual AWS Deployment Guide
 
 ## 1. Purpose
 
-This document describes how to manually deploy the IFIS AWS POC architecture using the AWS Management Console.
+This document provides the complete manual deployment procedure for the IFIS POC AWS architecture using the AWS Management Console.
 
-This guide is separate from the CloudFormation deployment guide.
+The manual deployment is intended to:
 
-Manual deployment is primarily intended for:
+- Understand each AWS resource before automation.
+- Reproduce the POC manually.
+- Validate the architecture independently from CloudFormation.
+- Provide a troubleshooting reference.
+- Provide a deployment reference for future environments.
+- Compare the manual deployment with the CloudFormation implementation.
 
-- AWS learning
-- Architecture understanding
-- Troubleshooting
-- Demonstration
-- Validation
-- Emergency/manual deployment scenarios
-
-For repeatable project deployments, the CloudFormation deployment method should be preferred.
+This is a POC guide. Production deployments must be reviewed for high availability, security, monitoring, backup, disaster recovery, cost, and operational requirements.
 
 ---
 
-# 2. Architecture
+# 2. Target Architecture
 
 The target architecture is:
 
@@ -40,2062 +38,2256 @@ The target architecture is:
         v
     Private EC2
         |
-        v
-    NAT Gateway
-        |
-        v
-    Internet
+        +---- Private Route Table
+                    |
+                    v
+               NAT Gateway
+                    |
+                    v
+                 Internet
 
-Supporting services:
+The EC2 instance is also integrated with:
 
     Private EC2
-        |
-        +---- AWS Systems Manager
-        |
-        +---- CloudWatch
-        |
-        +---- AWS Backup
+       |
+       +---- AWS Systems Manager
+       |
+       +---- CloudWatch
+       |
+       +---- AWS Backup
+
+Important architecture points:
+
+- EC2 is deployed in a private subnet.
+- EC2 does not have a public IPv4 address.
+- CloudFront reaches EC2 through a VPC Origin.
+- The EC2 Security Group allows HTTP traffic from the CloudFront managed prefix list.
+- NAT Gateway provides outbound connectivity from the private subnet.
+- SSM Session Manager is used for administration instead of SSH.
+- CloudWatch Agent collects memory and disk metrics.
+- AWS WAF protects the CloudFront distribution.
+- AWS Backup provides scheduled EC2 backups.
+- Route 53 is optional for the POC.
 
 ---
 
-# 3. Important Traffic Flows
+# 3. AWS Regions
 
-## 3.1 Application Traffic
+Use the following regions:
 
-    Internet
-        |
-        v
-    CloudFront
-        |
-        v
-    WAF
-        |
-        v
-    VPC Origin
-        |
-        v
-    Private EC2
-        |
-        v
-    Application
-
----
-
-## 3.2 EC2 Outbound Traffic
-
-    Private EC2
-        |
-        v
-    Private Route Table
-        |
-        v
-    NAT Gateway
-        |
-        v
-    Internet
-
-The NAT Gateway is used for outbound connectivity.
-
-It is not the path used by CloudFront to reach the EC2 instance.
-
----
-
-## 3.3 Administration
-
-    Administrator
-        |
-        v
-    AWS Systems Manager
-        |
-        v
-    Private EC2
-
-The EC2 instance does not require a public IP for normal administration.
-
----
-
-# 4. Current POC Values
-
-| Item | Current POC Value |
+| Service | Region |
 |---|---|
-| AWS Region | ap-south-1 |
-| WAF Region | us-east-1 |
+| VPC | ap-south-1 |
+| Private EC2 | ap-south-1 |
+| NAT Gateway | ap-south-1 |
+| CloudFront | Global |
+| CloudFront VPC Origin | ap-south-1 |
+| AWS WAF for CloudFront | us-east-1 |
+| AWS Backup | ap-south-1 |
+
+Important:
+
+A CloudFront-scoped WAF must be created in us-east-1.
+
+Always verify the AWS Console region before creating a resource.
+
+---
+
+# 4. Current POC Network Details
+
+The current POC uses the existing VPC.
+
+| Item | Value |
+|---|---|
+| Region | ap-south-1 |
 | VPC ID | vpc-06900f62513eff63 |
 | VPC CIDR | 172.31.0.0/16 |
-| NAT Public Subnet | subnet-0d6445bd9f644383b |
-| NAT Public Subnet CIDR | 172.31.0.0/20 |
-| Availability Zone | ap-south-1b |
-| Private Subnet CIDR | 172.31.48.0/20 |
-| CloudFront Prefix List | pl-9aa247f3 |
-| EC2 OS | Amazon Linux 2023 |
-| EC2 Type | t3a.small |
-| Application Port | TCP 80 |
+| Public subnet ID | subnet-0d6445bd9f644383b |
+| Public subnet CIDR | 172.31.0.0/20 |
+| Public subnet AZ | ap-south-1b |
+| Private subnet ID | subnet-08183fb86ccc151e |
+| Private subnet CIDR | 172.31.48.0/20 |
+| Private subnet AZ | ap-south-1b |
+| CloudFront managed prefix list | pl-9aa247f3 |
+| CloudFront prefix list name | com.amazonaws.global.cloudfront.origin-facing |
 
-### Important
+These IDs belong to the current POC AWS account.
 
-These values are for the current POC only.
-
-For another environment:
-
-- Verify the VPC.
-- Verify the public subnet.
-- Verify the Availability Zone.
-- Select an unused private subnet CIDR.
-- Verify the CloudFront managed prefix list.
-- Do not copy old AWS resource IDs blindly.
+For another account, region, or environment, identify the equivalent resources instead of copying these IDs.
 
 ---
 
 # 5. Prerequisites
 
-You need access to:
+Before starting the manual deployment, confirm that you have:
 
-- AWS Management Console
-- VPC
-- EC2
-- IAM
-- Systems Manager
-- CloudWatch
-- CloudFront
-- AWS WAF
-- AWS Backup
-
-The AWS account must have sufficient permissions to create the required resources.
-
----
-
-# 6. Select AWS Region
-
-Sign in to the AWS Console.
-
-For the main infrastructure select:
-
-    Asia Pacific (Mumbai)
-    ap-south-1
-
-The CloudFront WAF will be configured separately in:
-
-    US East (N. Virginia)
-    us-east-1
+- AWS Management Console access.
+- Permission to create VPC resources.
+- Permission to create NAT Gateways.
+- Permission to create IAM roles and instance profiles.
+- Permission to create EC2 instances.
+- Permission to create Security Groups.
+- Permission to create CloudFront resources.
+- Permission to create CloudFront VPC Origins.
+- Permission to create WAF resources.
+- Permission to create AWS Backup resources.
+- Permission to use Systems Manager.
+- Permission to use CloudWatch.
 
 ---
 
-# 7. Verify AWS Account
+# 6. Deployment Order
 
-Before creating resources, verify that you are in the correct AWS account.
+Deploy the architecture in this order:
 
-Check the account information in the AWS Console.
-
-Do not create resources until the correct AWS account has been confirmed.
+1. Verify VPC.
+2. Verify Internet Gateway.
+3. Identify public subnet.
+4. Create private subnet.
+5. Create private route table.
+6. Associate private subnet with private route table.
+7. Allocate Elastic IP.
+8. Create NAT Gateway.
+9. Add NAT route to private route table.
+10. Create EC2 IAM role.
+11. Create EC2 instance profile.
+12. Create EC2 Security Group.
+13. Launch EC2.
+14. Configure User Data.
+15. Configure storage.
+16. Configure IMDSv2.
+17. Disable public IP.
+18. Enable termination protection.
+19. Validate EC2.
+20. Validate SSM.
+21. Validate CloudWatch.
+22. Create CloudFront VPC Origin.
+23. Create CloudFront distribution.
+24. Create CloudFront WAF in us-east-1.
+25. Associate WAF with CloudFront.
+26. Create AWS Backup configuration.
+27. Run end-to-end validation.
+28. Run failure testing.
+29. Clean up the POC when testing is complete.
 
 ---
 
-# PART 1 – NETWORK
-
-# 8. Verify Existing VPC
+# 7. Step 1 – Verify the Existing VPC
 
 Open:
 
-    AWS Console
-        |
-        v
-    VPC
-        |
-        v
-    Your VPCs
+AWS Console → VPC → Your VPCs
 
-Find the VPC to be used.
-
-Current POC:
-
-    VPC ID:
-    vpc-06900f62513eff63
-
-    CIDR:
-    172.31.0.0/16
+Select the existing VPC.
 
 Verify:
 
-- VPC state = Available
-- Correct CIDR
-- Correct AWS account
-- Correct AWS Region
+VPC ID:
+vpc-06900f62513eff63
+
+IPv4 CIDR:
+172.31.0.0/16
+
+Region:
+ap-south-1
+
+Also verify that the VPC has an Internet Gateway attached.
+
+Go to:
+
+AWS Console → VPC → Internet Gateways
+
+Confirm that an Internet Gateway is attached to the VPC.
 
 ---
 
-# 9. Verify Internet Gateway
+# 8. Step 2 – Identify the Public Subnet
 
 Open:
 
-    VPC
-        |
-        v
-    Internet gateways
+AWS Console → VPC → Subnets
 
-Find the Internet Gateway attached to the selected VPC.
+Identify the public subnet:
 
-Verify:
+Subnet ID:
+subnet-0d6445bd9f644383b
 
-    State = Attached
+CIDR:
+172.31.0.0/20
 
-The public subnet used for the NAT Gateway must have Internet Gateway connectivity.
+Availability Zone:
+ap-south-1b
+
+Check the subnet's associated route table.
+
+The public subnet must have:
+
+Destination:
+0.0.0.0/0
+
+Target:
+Internet Gateway
+
+This subnet will host the NAT Gateway.
+
+Do not deploy the EC2 instance into this subnet.
 
 ---
 
-# 10. Verify Public Subnets
+# 9. Step 3 – Create the Private Subnet
 
 Open:
 
-    VPC
-        |
-        v
-    Subnets
-
-Current POC public subnets include:
-
-    subnet-0d6445bd9f644383b
-    172.31.0.0/20
-    ap-south-1b
-
-The NAT Gateway will be placed in this public subnet.
-
-Verify that the subnet has a public route table.
-
----
-
-# 11. Verify Public Route Table
-
-Open:
-
-    VPC
-        |
-        v
-    Route Tables
-
-Find the route table associated with the public subnet.
-
-Open:
-
-    Routes
-
-Expected:
-
-    Destination:
-    0.0.0.0/0
-
-    Target:
-    Internet Gateway
-
-This route allows the NAT Gateway's public subnet to reach the Internet.
-
----
-
-# 12. Create Private Subnet
-
-Open:
-
-    AWS Console
-        |
-        v
-    VPC
-        |
-        v
-    Subnets
-
-Click:
-
-    Create subnet
+AWS Console → VPC → Subnets → Create subnet
 
 Select the existing VPC.
 
 Enter:
 
-    Subnet name:
-    IFIS-POC-private-subnet
+Subnet name:
+IFIS-POC-private-subnet
 
-Select:
+Availability Zone:
+ap-south-1b
 
-    Availability Zone:
-    ap-south-1b
+IPv4 CIDR:
+172.31.48.0/20
 
-Enter:
+Create the subnet.
 
-    IPv4 subnet CIDR block:
-    172.31.48.0/20
+After creation, verify the subnet CIDR and Availability Zone.
 
-Click:
+Also verify that public IPv4 address assignment is not enabled for the private subnet.
 
-    Create subnet
+The expected private subnet is:
 
----
+Subnet ID:
+subnet-08183fb86ccc151e
 
-# 13. Disable Public IPv4 Assignment
-
-Open the new private subnet.
-
-Choose:
-
-    Actions
-        |
-        v
-    Edit subnet settings
-
-Find:
-
-    Enable auto-assign public IPv4 address
-
-Make sure it is disabled.
-
-Save the configuration.
-
-The private subnet must not automatically assign public IPv4 addresses.
+CIDR:
+172.31.48.0/20
 
 ---
 
-# 14. Create Private Route Table
+# 10. Step 4 – Create the Private Route Table
 
 Open:
 
-    VPC
-        |
-        v
-    Route Tables
-
-Click:
-
-    Create route table
+AWS Console → VPC → Route Tables → Create route table
 
 Enter:
 
-    Name:
-    IFIS-POC-private-rt
+Name:
+IFIS-POC-private-route-table
 
-Select the correct VPC.
+VPC:
+Existing IFIS VPC
 
-Click:
+Create the route table.
 
-    Create route table
+At this point, the route table will normally contain the local VPC route automatically.
 
----
+Expected local route:
 
-# 15. Associate Private Subnet
-
-Open the newly created private route table.
-
-Select:
-
-    Subnet associations
-
-Click:
-
-    Edit subnet associations
-
-Select:
-
-    IFIS-POC-private-subnet
-
-Save.
-
----
-
-# 16. Create NAT Gateway
-
-Open:
-
-    VPC
-        |
-        v
-    NAT Gateways
-
-Click:
-
-    Create NAT gateway
-
-Select:
-
-    Subnet:
-    <PUBLIC_SUBNET_ID>
-
-Set:
-
-    Connectivity type:
-    Public
-
-Allocate an Elastic IP.
-
-Create the NAT Gateway.
-
-Wait until:
-
-    State = Available
-
----
-
-# 17. Add NAT Route
-
-Open the private route table.
-
-Go to:
-
-    Routes
-
-Click:
-
-    Edit routes
-
-Add:
-
-    Destination:
-    0.0.0.0/0
+Destination:
+172.31.0.0/16
 
 Target:
-
-    NAT Gateway
-
-Select the newly created NAT Gateway.
-
-Save.
+local
 
 ---
 
-# 18. Validate Network
+# 11. Step 5 – Associate the Private Subnet
 
-Verify:
-
-- [ ] Private subnet exists
-- [ ] Private subnet uses correct CIDR
-- [ ] Private subnet is in correct AZ
-- [ ] Public IP assignment is disabled
-- [ ] Private route table exists
-- [ ] Private subnet is associated
-- [ ] Default route points to NAT Gateway
-- [ ] NAT Gateway is Available
-- [ ] NAT Gateway is in public subnet
-- [ ] Public subnet has Internet Gateway route
-
----
-
-# PART 2 – SECURITY GROUP
-
-# 19. Create Security Group
-
-Open:
-
-    EC2
-        |
-        v
-    Security Groups
-
-Click:
-
-    Create security group
-
-Enter:
-
-    Security group name:
-    IFIS-POC-EC2-SG
-
-Select the correct VPC.
-
----
-
-# 20. Add Inbound HTTP Rule
-
-Add:
-
-    Type:
-    HTTP
-
-    Protocol:
-    TCP
-
-    Port:
-    80
-
-For the current POC, allow traffic from:
-
-    VPC CIDR:
-    172.31.0.0/16
-
----
-
-# 21. Add CloudFront Origin-Facing Rule
-
-Add another HTTP rule:
-
-    Type:
-    HTTP
-
-    Protocol:
-    TCP
-
-    Port:
-    80
-
-For the source, select the AWS-managed prefix list:
-
-    com.amazonaws.global.cloudfront.origin-facing
-
-Current POC:
-
-    pl-9aa247f3
-
-For another environment, verify the correct managed prefix list.
-
----
-
-# 22. Configure Outbound Rules
-
-The POC allows outbound traffic.
-
-Expected:
-
-    All traffic
-    Destination:
-    0.0.0.0/0
-
-Create the Security Group.
-
----
-
-# PART 3 – IAM AND EC2
-
-# 23. Create IAM Role
-
-Open:
-
-    AWS Console
-        |
-        v
-    IAM
-        |
-        v
-    Roles
-
-Click:
-
-    Create role
-
-Select trusted entity:
-
-    AWS service
+Open the new private route table.
 
 Select:
 
-    EC2
-
-Attach:
-
-    AmazonSSMManagedInstanceCore
-
-and:
-
-    CloudWatchAgentServerPolicy
-
-Use an appropriate role name, for example:
-
-    IFIS-POC-EC2-Role
-
-Create the role.
-
----
-
-# 24. Launch EC2
-
-Open:
-
-    AWS Console
-        |
-        v
-    EC2
-        |
-        v
-    Instances
-
-Click:
-
-    Launch instance
-
-Set:
-
-    Name:
-    IFIS-POC-EC2
-
----
-
-# 25. Select Amazon Linux 2023
+Subnet associations → Edit subnet associations
 
 Select:
 
-    Amazon Linux 2023
+IFIS-POC-private-subnet
 
-Use the current supported Amazon Linux 2023 AMI available in the selected AWS Region.
+Save the association.
 
-Do not copy an AMI ID from another Region.
-
----
-
-# 26. Select Instance Type
-
-Current POC:
-
-    t3a.small
-
-The production instance type should follow the approved project sizing.
+Verify that the private subnet is associated with the private route table.
 
 ---
 
-# 27. Key Pair
+# 12. Step 6 – Allocate an Elastic IP
 
-The preferred administration method is Systems Manager.
-
-SSH is not required for normal administration.
-
-If the environment requires a key pair:
-
-- Follow the organization's key management process.
-- Store the private key securely.
-- Do not commit it to Git.
-- Do not upload it to GitHub.
-
----
-
-# 28. Configure EC2 Network
-
-Under Network settings:
-
-Select:
-
-    VPC:
-    <VPC_ID>
-
-Select:
-
-    Subnet:
-    <PRIVATE_SUBNET_ID>
-
-Set:
-
-    Auto-assign Public IP:
-    Disable
-
-Select:
-
-    Security Group:
-    IFIS-POC-EC2-SG
-
----
-
-# 29. Configure Storage
-
-Configure the root volume:
-
-    Size:
-    20 GB
-
-    Volume type:
-    gp3
-
-    Encryption:
-    Enabled
-
----
-
-# 30. Configure IAM Role
-
-Under advanced or IAM settings, select:
-
-    IFIS-POC-EC2-Role
-
-The EC2 instance must receive the IAM role containing:
-
-    AmazonSSMManagedInstanceCore
-
-and:
-
-    CloudWatchAgentServerPolicy
-
----
-
-# 31. Launch EC2
-
-Before clicking Launch, verify:
-
-- Correct VPC
-- Correct private subnet
-- Public IP disabled
-- Correct Security Group
-- Correct IAM role
-- Encrypted root volume
-
-Click:
-
-    Launch instance
-
----
-
-# 32. Validate EC2
-
-Open the instance.
-
-Verify:
-
-    State:
-    Running
-
-Verify:
-
-    Subnet:
-    Private subnet
-
-Verify:
-
-    Public IPv4:
-    None
-
-Verify:
-
-    Private IPv4:
-    Present
-
-Record the private IP.
-
-Do not treat the private IP as permanent.
-
-A replacement EC2 instance can receive a different private IP.
-
----
-
-# PART 4 – SYSTEMS MANAGER
-
-# 33. Verify SSM Managed Node
+The NAT Gateway requires an Elastic IP.
 
 Open:
 
-    AWS Console
-        |
-        v
-    Systems Manager
-        |
-        v
-    Managed nodes
-
-Wait for the EC2 instance to appear.
-
----
-
-# 34. Start Session Manager
-
-Open:
-
-    Systems Manager
-        |
-        v
-    Session Manager
-        |
-        v
-    Start session
+AWS Console → VPC → Elastic IPs
 
 Select:
 
-    IFIS-POC-EC2
+Allocate Elastic IP address
 
-Start the session.
+Use:
 
-This confirms administrative access without SSH.
+Network Border Group:
+ap-south-1
 
----
+Allocate the address.
 
-# 35. Validate Application
+Record the allocated Elastic IP.
 
-Inside the Session Manager session, run:
-
-    sudo ss -lntp
-
-Verify that TCP port 80 is listening.
-
-Then:
-
-    curl http://localhost
-
-The application should return its expected response.
+Do not release it while the NAT Gateway is using it.
 
 ---
 
-# PART 5 – CLOUDWATCH
-
-# 36. Verify CloudWatch
+# 13. Step 7 – Create the NAT Gateway
 
 Open:
 
-    AWS Console
-        |
-        v
-    CloudWatch
-
-Check:
-
-    Metrics
-
-and:
-
-    Alarms
-
-Verify that the expected EC2 monitoring and alarms exist.
-
----
-
-# PART 6 – CLOUDFRONT VPC ORIGIN
-
-# 37. CloudFront Account Verification
-
-Before creating a VPC Origin, verify that the AWS account is allowed to create CloudFront resources.
-
-If you see:
-
-    Your account must be verified before you can add new CloudFront resources.
-
-this is an account-level CloudFront restriction.
-
-Contact AWS Support and request CloudFront resource creation to be enabled.
-
-Do not assume that the VPC Origin configuration is wrong.
-
----
-
-# 38. Create VPC Origin
-
-Open:
-
-    AWS Console
-        |
-        v
-    CloudFront
-
-Find the VPC Origins section.
-
-Choose:
-
-    Create VPC origin
-
-Select the EC2 resource.
+AWS Console → VPC → NAT Gateways → Create NAT Gateway
 
 Configure:
 
-    HTTP port:
-    80
+Subnet:
+Public subnet 172.31.0.0/20
 
-    HTTPS port:
-    443
+Connectivity type:
+Public
 
-    Origin protocol:
-    HTTP only
+Elastic IP allocation ID:
+Select the Elastic IP allocated in the previous step.
 
-Create the VPC Origin.
+Name:
 
----
+IFIS-POC-NAT
 
-# 39. Wait for VPC Origin
+Create the NAT Gateway.
 
-Wait until the VPC Origin status becomes:
+Wait until the NAT Gateway state becomes:
 
-    Deployed
+Available
 
-VPC Origin creation can take several minutes.
-
----
-
-# 40. Validate VPC Origin
-
-Verify:
-
-- Correct EC2 resource
-- HTTP port = 80
-- HTTPS port = 443
-- Origin protocol = HTTP only
-- Status = Deployed
-
-Record the VPC Origin ID.
+Do not continue until the NAT Gateway is available.
 
 ---
 
-# PART 7 – WAF
-
-# 41. Open WAF
+# 14. Step 8 – Add the Private Route Through NAT
 
 Open:
 
-    AWS Console
-        |
-        v
-    WAF & Shield
-
-Switch the AWS Region to:
-
-    US East (N. Virginia)
-    us-east-1
-
-CloudFront-scoped WAF is managed from this Region.
-
----
-
-# 42. Create Web ACL
+AWS Console → VPC → Route Tables
 
 Select:
 
-    Web ACLs
+IFIS-POC-private-route-table
 
-Click:
+Open:
 
-    Create web ACL
+Routes → Edit routes
 
-Enter an appropriate name, for example:
+Add:
 
-    IFIS-POC-cloudfront-waf
+Destination:
+0.0.0.0/0
 
-Set scope:
+Target:
+NAT Gateway
 
-    CloudFront
+Select the IFIS POC NAT Gateway.
 
-Set default action:
+Save the route.
 
-    Allow
+The final private route table should contain approximately:
+
+Destination:
+172.31.0.0/16
+
+Target:
+local
+
+Destination:
+0.0.0.0/0
+
+Target:
+nat-xxxxxxxxxxxxxxxxx
+
+This allows resources in the private subnet to initiate outbound connections.
+
+It does not make the private EC2 publicly reachable.
 
 ---
 
-# 43. Add AWS Managed Rules
+# 15. Step 9 – Create the EC2 IAM Role
 
-Add:
+The EC2 instance needs permissions for Systems Manager and CloudWatch.
 
-    AWSManagedRulesCommonRuleSet
+Open:
 
-Add:
+AWS Console → IAM → Roles → Create role
 
-    AWSManagedRulesKnownBadInputsRuleSet
+Select:
 
-Add:
+Trusted entity type:
+AWS service
 
-    AWSManagedRulesLinuxRuleSet
+Use case:
+EC2
 
-Add:
+Continue.
 
-    AWSManagedRulesSQLiRuleSet
+Attach:
 
-Add:
+AmazonSSMManagedInstanceCore
 
-    AWSManagedRulesAmazonIpReputationList
+and:
 
-Review the configuration.
+CloudWatchAgentServerPolicy
+
+Continue.
+
+Role name:
+
+IFIS-POC-EC2-Role
+
+Create the role.
+
+The role provides:
+
+- Systems Manager Session Manager access.
+- CloudWatch Agent permissions.
+
+Do not attach AdministratorAccess to the EC2 role.
+
+---
+
+# 16. Step 10 – Create or Verify the Instance Profile
+
+When an IAM role is created for EC2 through the AWS Console, AWS normally creates an instance profile associated with the role.
+
+Open:
+
+AWS Console → IAM → Roles
+
+Open:
+
+IFIS-POC-EC2-Role
+
+Verify that the role can be used as an EC2 instance profile.
+
+When launching EC2, select the corresponding IAM role under:
+
+Advanced details → IAM instance profile
+
+---
+
+# 17. Step 11 – Identify the CloudFront Managed Prefix List
+
+CloudFront VPC Origin traffic should be allowed through the AWS-managed CloudFront origin-facing prefix list.
+
+Open:
+
+AWS Console → VPC → Managed Prefix Lists
+
+Find:
+
+Name:
+com.amazonaws.global.cloudfront.origin-facing
+
+Current POC prefix list:
+
+pl-9aa247f3
+
+Verify the prefix list is the AWS-managed CloudFront origin-facing prefix list.
+
+Do not blindly copy this ID to another account or region without verification.
+
+---
+
+# 18. Step 12 – Create the EC2 Security Group
+
+Open:
+
+AWS Console → EC2 → Security Groups → Create security group
+
+Configure:
+
+Security group name:
+IFIS-POC-EC2-SG
+
+Description:
+Security group for private IFIS POC EC2
+
+VPC:
+Existing IFIS VPC
+
+Inbound rules:
+
+Rule 1:
+
+Type:
+HTTP
+
+Protocol:
+TCP
+
+Port:
+80
+
+Source:
+VPC CIDR
+
+172.31.0.0/16
+
+Rule 2:
+
+Type:
+HTTP
+
+Protocol:
+TCP
+
+Port:
+80
+
+Source:
+Custom
+
+Select the AWS-managed prefix list:
+
+com.amazonaws.global.cloudfront.origin-facing
+
+pl-9aa247f3
+
+Outbound rules:
+
+Allow all outbound traffic.
+
+Recommended outbound configuration:
+
+Type:
+All traffic
+
+Destination:
+0.0.0.0/0
+
+Create the Security Group.
+
+Important:
+
+Do not allow HTTP from 0.0.0.0/0.
+
+The purpose of the Security Group is to allow the required internal/VPC traffic and CloudFront origin-facing traffic while keeping the EC2 instance private.
+
+---
+
+# 19. Step 13 – Launch the EC2 Instance
+
+Open:
+
+AWS Console → EC2 → Instances → Launch instance
+
+Configure:
+
+Name:
+
+IFIS-POC-EC2
+
+AMI:
+
+Amazon Linux 2023
+
+Architecture:
+
+x86_64
+
+Instance type:
+
+t3.small
+
+For a POC, a smaller instance can be used if required for cost control, but the documented project baseline is t3.small.
+
+Key pair:
+
+No key pair is required when using Systems Manager Session Manager.
+
+Network settings:
+
+VPC:
+Existing IFIS VPC
+
+Subnet:
+IFIS-POC-private-subnet
+
+CIDR:
+172.31.48.0/20
+
+Auto-assign public IP:
+Disable
+
+Security Group:
+IFIS-POC-EC2-SG
+
+IAM instance profile:
+
+IFIS-POC-EC2-Role
+
+---
+
+# 20. Step 14 – Configure EC2 Storage
+
+Under:
+
+Configure storage
+
+Use:
+
+Root volume:
+
+Device:
+/
+
+Volume type:
+gp3
+
+Size:
+20 GiB
+
+Delete on termination:
+Yes
+
+Encryption:
+Enable encryption
+
+The root volume should be encrypted.
+
+For the POC, the default AWS-managed EBS encryption key is acceptable unless the target environment requires a customer-managed KMS key.
+
+---
+
+# 21. Step 15 – Configure IMDSv2
+
+Expand:
+
+Advanced details
+
+Find:
+
+Metadata version
+
+Configure:
+
+IMDSv2:
+Required
+
+This corresponds to the CloudFormation configuration requiring:
+
+HttpTokens:
+required
+
+This prevents IMDSv1 from being used.
+
+---
+
+# 22. Step 16 – Configure Termination Protection
+
+For the POC architecture, termination protection should be enabled to reduce accidental deletion risk.
+
+After the instance is launched:
+
+Open:
+
+EC2 → Instances
+
+Select:
+
+IFIS-POC-EC2
+
+Choose:
+
+Actions → Instance settings → Change termination protection
+
+Enable:
+
+Termination protection
+
+Important:
+
+Termination protection can prevent CloudFormation or manual deletion workflows from deleting the instance.
+
+Before final POC cleanup, termination protection may need to be disabled.
+
+---
+
+# 23. Step 17 – Configure EC2 User Data
+
+This is an important part of the manual deployment.
+
+The CloudFormation compute stack uses User Data to bootstrap the EC2 instance.
+
+The manual deployment must use equivalent User Data so that the manually created EC2 behaves like the CloudFormation-created EC2.
+
+During EC2 launch:
+
+Open:
+
+Advanced details
+
+Find:
+
+User data
+
+Paste the following complete User Data:
+
+    #!/bin/bash
+
+    dnf update -y
+
+    dnf install -y amazon-cloudwatch-agent jq unzip wget curl
+
+    timedatectl set-timezone Asia/Tokyo
+
+    systemctl enable amazon-ssm-agent
+    systemctl start amazon-ssm-agent
+
+    cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'EOF'
+    {
+      "agent": {
+        "metrics_collection_interval": 300,
+        "run_as_user": "root"
+      },
+      "metrics": {
+        "namespace": "IFIS/EC2",
+        "metrics_collected": {
+          "mem": {
+            "measurement": [
+              "mem_used_percent"
+            ],
+            "metrics_collection_interval": 300
+          },
+          "disk": {
+            "measurement": [
+              "used_percent"
+            ],
+            "resources": [
+              "/"
+            ],
+            "metrics_collection_interval": 300
+          }
+        }
+      }
+    }
+    EOF
+
+    systemctl enable amazon-cloudwatch-agent
+    systemctl start amazon-cloudwatch-agent
+
+Important:
+
+The User Data is executed during the initial instance boot.
+
+The EC2 instance requires outbound connectivity through the NAT Gateway to download packages and communicate with AWS services.
+
+If NAT connectivity is unavailable and no VPC endpoints are configured, SSM and package installation may fail.
+
+---
+
+# 24. Step 18 – Launch the Instance
+
+Review all EC2 settings.
+
+Important final configuration:
+
+| Setting | Expected Value |
+|---|---|
+| AMI | Amazon Linux 2023 |
+| Instance type | t3.small |
+| VPC | IFIS VPC |
+| Subnet | Private subnet |
+| Public IP | Disabled |
+| Security Group | IFIS-POC-EC2-SG |
+| IAM role | IFIS-POC-EC2-Role |
+| Root volume | 20 GiB gp3 |
+| Encryption | Enabled |
+| IMDSv2 | Required |
+| User Data | Configured |
+| Termination protection | Enable after launch |
+
+Launch the instance.
+
+---
+
+# 25. Step 19 – Verify EC2 Networking
+
+Open:
+
+AWS Console → EC2 → Instances
+
+Select:
+
+IFIS-POC-EC2
+
+Verify:
+
+State:
+Running
+
+Subnet:
+Private subnet
+
+Private IPv4:
+Assigned
+
+Public IPv4:
+None
+
+Public DNS:
+None
+
+Security Group:
+IFIS-POC-EC2-SG
+
+The instance must not have a public IP address.
+
+---
+
+# 26. Step 20 – Verify EC2 Private IP
+
+Do not configure a fixed private IP unless the architecture specifically requires one.
+
+The EC2 instance should receive a private IP from the private subnet.
+
+Example:
+
+172.31.x.x
+
+The exact private IP can change if the instance is recreated.
+
+Applications should normally use DNS, load balancing, or CloudFront VPC Origin rather than depending on a manually assigned EC2 private IP.
+
+---
+
+# 27. Step 21 – Validate Systems Manager
+
+Open:
+
+AWS Console → Systems Manager → Fleet Manager
+
+or:
+
+AWS Console → Systems Manager → Managed nodes
+
+The EC2 instance should appear as a managed node.
+
+Expected state:
+
+Online
+
+If the instance does not appear:
+
+Check:
+
+1. IAM role.
+2. AmazonSSMManagedInstanceCore policy.
+3. NAT Gateway.
+4. Private route table.
+5. Security Group outbound access.
+6. Instance User Data.
+7. SSM Agent service.
+8. Instance time and DNS connectivity.
+
+---
+
+# 28. Step 22 – Connect Using Session Manager
+
+Open:
+
+AWS Console → Systems Manager → Session Manager
+
+Select:
+
+Start session
+
+Select:
+
+IFIS-POC-EC2
+
+Start the session.
+
+No SSH key is required.
+
+No public IP is required.
+
+No inbound SSH port 22 is required.
+
+This is the preferred administration method for the POC.
+
+---
+
+# 29. Step 23 – Validate the User Data
+
+Inside the Session Manager session, verify:
+
+    systemctl status amazon-ssm-agent
+
+The service should be active.
+
+Verify CloudWatch Agent:
+
+    systemctl status amazon-cloudwatch-agent
+
+The service should be active.
+
+Verify installed packages:
+
+    rpm -q jq
+    rpm -q unzip
+    rpm -q wget
+    rpm -q curl
+
+Verify timezone:
+
+    timedatectl
+
+Expected timezone:
+
+    Asia/Tokyo
+
+Verify the CloudWatch Agent configuration:
+
+    cat /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
+The configuration should contain:
+
+- IFIS/EC2 namespace.
+- Memory metric.
+- Root disk metric.
+- 300-second collection interval.
+
+---
+
+# 30. Step 24 – Validate Outbound Connectivity
+
+From the Session Manager session, test DNS:
+
+    nslookup amazon.com
+
+or:
+
+    curl -I https://aws.amazon.com
+
+If the request succeeds, private-subnet outbound connectivity is working.
+
+If it fails, check:
+
+- Private route table.
+- NAT Gateway state.
+- Public subnet route table.
+- Internet Gateway.
+- Security Group outbound rules.
+- Network ACLs.
+- DNS settings.
+
+---
+
+# 31. Step 25 – Install or Verify a Web Server
+
+The CloudFront VPC Origin requires the EC2 instance to provide a reachable HTTP service.
+
+For the POC, install a simple web server if the application is not already installed.
+
+Example:
+
+    dnf install -y httpd
+
+Enable and start it:
+
+    systemctl enable httpd
+    systemctl start httpd
+
+Verify:
+
+    systemctl status httpd
+
+Create a simple test page:
+
+    echo "IFIS POC - CloudFront VPC Origin Test" > /var/www/html/index.html
+
+Test locally from the EC2 instance:
+
+    curl http://localhost
+
+Expected result:
+
+    IFIS POC - CloudFront VPC Origin Test
+
+Important:
+
+The EC2 Security Group must allow TCP port 80 from the required CloudFront origin-facing prefix list.
+
+---
+
+# 32. Step 26 – Validate HTTP From Inside the VPC
+
+The application must be listening on:
+
+TCP 80
+
+Verify:
+
+    ss -lntp | grep :80
+
+Expected result should show a listening HTTP service.
+
+If HTTP is not listening, CloudFront cannot reach the application even if the VPC Origin configuration is correct.
+
+---
+
+# 33. Step 27 – Create the CloudFront VPC Origin
+
+Open:
+
+AWS Console → CloudFront
+
+Select:
+
+VPC origins
+
+Choose:
+
+Create VPC origin
+
+Select the private EC2 instance.
+
+For the current POC:
+
+EC2:
+IFIS-POC-EC2
+
+Configure:
+
+Origin protocol:
+HTTP only
+
+HTTP port:
+80
+
+HTTPS port:
+443
+
+Create the VPC Origin.
+
+Wait for the VPC Origin status to become:
+
+Deployed
+
+VPC Origin creation can take several minutes.
+
+Do not continue until the VPC Origin is ready.
+
+Important:
+
+CloudFront VPC Origin connects CloudFront to the private resource.
+
+The EC2 instance does not need a public IP.
+
+---
+
+# 34. Step 28 – Create the CloudFront Distribution
+
+Open:
+
+AWS Console → CloudFront → Distributions
+
+Choose:
+
+Create distribution
+
+Select the VPC Origin created in the previous step.
+
+Configure:
+
+Origin:
+IFIS-POC VPC Origin
+
+Origin protocol:
+HTTP only
+
+Viewer protocol policy:
+
+Redirect HTTP to HTTPS
+
+Allowed HTTP methods:
+
+GET, HEAD
+
+For a simple POC, caching can be disabled or minimized according to the application requirements.
+
+For the IFIS POC, use a configuration consistent with the CloudFormation distribution:
+
+Caching:
+Disabled / no-cache behavior
+
+HTTP versions:
+
+HTTP/2
+
+HTTP/3 may be enabled if desired and supported by the account configuration.
+
+IPv6:
+
+Disable if matching the documented POC design.
+
+Default root object:
+
+Not required if the application handles the root path.
+
+Create the distribution.
+
+Wait for the CloudFront distribution status to become:
+
+Deployed
+
+---
+
+# 35. Step 29 – Verify the CloudFront Distribution
+
+After deployment, record:
+
+Distribution ID
+
+CloudFront domain name
+
+Example:
+
+dxxxxxxxxxxxx.cloudfront.net
+
+Open the CloudFront domain in a browser:
+
+https://dxxxxxxxxxxxx.cloudfront.net
+
+The request should reach:
+
+CloudFront
+    →
+VPC Origin
+    →
+Private EC2
+    →
+HTTP service
+
+The EC2 instance should remain private.
+
+---
+
+# 36. Step 30 – Create the CloudFront WAF
+
+Important:
+
+CloudFront-scoped WAF must be created in:
+
+us-east-1
+
+Change the AWS Console region to:
+
+US East (N. Virginia)
+
+Open:
+
+AWS Console → WAF & Shield
+
+Choose:
+
+Web ACLs
+
+Create web ACL.
+
+Configure:
+
+Resource type:
+CloudFront distributions
+
+Scope:
+CloudFront / Global
+
+Name:
+
+IFIS-POC-cloudfront-waf
+
+Default action:
+
+Allow
+
+Add the following AWS Managed Rules:
+
+1. AWSManagedRulesCommonRuleSet
+2. AWSManagedRulesKnownBadInputsRuleSet
+3. AWSManagedRulesLinuxRuleSet
+4. AWSManagedRulesSQLiRuleSet
+5. AWSManagedRulesAmazonIpReputationList
+
+Enable:
+
+Sampled requests
+
+CloudWatch metrics
 
 Create the Web ACL.
 
 ---
 
-# 44. Record WAF ARN
-
-Open the Web ACL.
-
-Record:
-
-    Web ACL ARN
-
-This ARN will be required when configuring CloudFront.
-
----
-
-# PART 8 – CLOUDFRONT DISTRIBUTION
-
-# 45. Create CloudFront Distribution
+# 37. Step 31 – Associate WAF With CloudFront
 
 Open:
 
-    AWS Console
-        |
-        v
-    CloudFront
-        |
-        v
-    Distributions
+AWS Console → CloudFront
 
-Click:
+Select the IFIS POC distribution.
 
-    Create distribution
+Open:
 
-Select the VPC Origin created earlier.
+Security
 
----
+Find:
 
-# 46. Configure Viewer Protocol
-
-Configure:
-
-    HTTP -> HTTPS Redirect
-
-The target behavior is:
-
-    HTTP request
-        |
-        v
-    CloudFront
-        |
-        v
-    HTTPS
-
----
-
-# 47. Configure Origin
-
-Use the VPC Origin.
-
-Target:
-
-    HTTP
-    Port 80
-
-Verify that the origin points to the intended private EC2 resource.
-
----
-
-# 48. Configure WAF
-
-During CloudFront distribution configuration, select the WAF Web ACL created earlier.
+Web Application Firewall (WAF)
 
 Select:
 
-    IFIS-POC-cloudfront-waf
+IFIS-POC-cloudfront-waf
 
-Verify that the scope is:
+Save the configuration.
 
-    CloudFront
-
----
-
-# 49. Configure Distribution
-
-Configure the remaining CloudFront settings according to the approved project architecture.
-
-The POC target includes:
-
-- HTTPS
-- HTTP to HTTPS redirect
-- HTTP/2
-- HTTP/3
-- IPv6 disabled
-- Caching disabled for the application POC
-- Required HTTP methods
-
-Create the distribution.
-
----
-
-# 50. Wait for CloudFront Deployment
-
-CloudFront deployment can take several minutes.
-
-Wait until the distribution status shows:
-
-    Enabled
-
-and deployment is complete.
-
----
-
-# 51. Record CloudFront Domain
-
-Open the CloudFront distribution.
-
-Copy the distribution domain.
-
-It will look similar to:
-
-    xxxxxxxxxxxx.cloudfront.net
-
-Record it in the deployment worksheet.
-
----
-
-# 52. Test CloudFront
-
-Open:
-
-    https://<CLOUDFRONT_DOMAIN>
-
-Verify that the application responds.
-
-Expected:
-
-    Application response
-
----
-
-# 53. CloudFront Troubleshooting
-
-If CloudFront cannot reach the EC2 instance, check in this order:
-
-1. EC2 is Running.
-2. Application is listening on TCP 80.
-3. Security Group allows HTTP from the CloudFront managed prefix list.
-4. VPC Origin status is Deployed.
-5. VPC Origin points to the correct EC2.
-6. CloudFront distribution is Enabled.
-7. WAF is not blocking valid traffic.
-
----
-
-# PART 9 – AWS BACKUP
-
-# 54. Open AWS Backup
-
-Switch back to:
-
-    ap-south-1
-
-Open:
-
-    AWS Backup
-
----
-
-# 55. Create Backup Vault
-
-Open:
-
-    Backup vaults
-
-Click:
-
-    Create backup vault
-
-Name:
-
-    IFIS-POC-backup-vault
-
-Create the vault.
-
----
-
-# 56. Create Backup Plan
-
-Open:
-
-    Backup plans
-
-Click:
-
-    Create backup plan
-
-Create a weekly backup schedule.
-
-The target POC schedule is:
-
-    Monday 00:00 JST
-
-Verify the required UTC time before configuring the schedule.
-
----
-
-# 57. Configure Backup Retention
-
-Set:
-
-    Retention:
-    30 days
-
-Verify the lifecycle settings.
-
----
-
-# 58. Create Backup Selection
-
-Select the EC2 instance:
-
-    IFIS-POC-EC2
-
-Create the backup selection.
-
-Use the appropriate AWS Backup service role.
-
----
-
-# 59. Validate Backup Plan
-
-Verify:
-
-- Backup plan exists
-- Backup rule exists
-- EC2 is selected
-- Schedule is correct
-- Retention is correct
-
----
-
-# 60. Perform On-Demand Backup
-
-For the POC, do not wait for the scheduled backup.
-
-Start an on-demand backup.
-
-Select the EC2 instance.
-
-Choose the backup vault:
-
-    IFIS-POC-backup-vault
-
-Start the backup job.
-
----
-
-# 61. Verify Backup Job
-
-Open:
-
-    AWS Backup
-        |
-        v
-    Jobs
-
-Verify:
-
-    Status = Completed
-
-Record:
-
-- Backup job ID
-- Resource
-- Start time
-- Completion time
-- Recovery point ID
-
----
-
-# 62. Verify Recovery Point
-
-Open:
-
-    AWS Backup
-        |
-        v
-    Backup vaults
-        |
-        v
-    IFIS-POC-backup-vault
-
-Verify that the recovery point exists.
-
----
-
-# PART 10 – RESTORE TEST
-
-# 63. Restore Backup
-
-Select the recovery point.
-
-Choose:
-
-    Restore
-
-Restore the resource into a test environment.
-
-Do not overwrite production resources.
-
----
-
-# 64. Validate Restored EC2
-
-After restoration, verify:
-
-- EC2 exists
-- EC2 is Running
-- Network configuration
-- Security Group
-- IAM role
-- Application
-- Management access
-
----
-
-# 65. Validate Application After Restore
-
-Connect through Systems Manager if available.
-
-Run:
-
-    curl http://localhost
-
-Verify that the application responds.
-
-Record the restore result.
-
----
-
-# PART 11 – END-TO-END VALIDATION
-
-# 66. Application Test
-
-Test:
-
-    Browser
-        |
-        v
-    CloudFront
-        |
-        v
-    WAF
-        |
-        v
-    VPC Origin
-        |
-        v
-    Private EC2
-        |
-        v
-    Application
-
-Open:
-
-    https://<CLOUDFRONT_DOMAIN>
-
-Expected:
-
-    Application response
-
----
-
-# 67. Verify EC2 Remains Private
-
-Return to:
-
-    EC2
-        |
-        v
-    Instances
-
-Verify:
-
-    Public IPv4 address:
-    None
-
-This confirms that the application is being served through CloudFront without giving the EC2 instance a public IP.
-
----
-
-# 68. Test EC2 Outbound Connectivity
-
-Start a Session Manager session.
-
-Run:
-
-    curl -I https://aws.amazon.com
-
-Expected:
-
-    Successful HTTP response
-
-Expected path:
-
-    EC2
-        |
-        v
-    Private Route Table
-        |
-        v
-    NAT Gateway
-        |
-        v
-    Internet
-
----
-
-# 69. Validate SSM
-
-Verify:
-
-    Systems Manager
-        |
-        v
-    Managed nodes
-
-The EC2 instance should be available.
-
-Start another Session Manager session if required.
-
----
-
-# 70. Validate CloudWatch
-
-Verify:
-
-    CloudWatch
-        |
-        v
-    Metrics
-
-and:
-
-    CloudWatch
-        |
-        v
-    Alarms
-
-Verify that expected metrics and alarms are available.
-
----
-
-# PART 12 – FAILURE TESTING
-
-# 71. EC2 Failure Test
-
-For a POC, stop the EC2 instance.
-
-Expected:
-
-    CloudFront
-        |
-        v
-    VPC Origin
-        |
-        X
-    EC2
-
-The application should become unavailable.
-
-Start the EC2 instance again.
-
----
-
-# 72. NAT Failure Concept
-
-NAT Gateway failure affects outbound traffic from the private subnet.
-
-It does not represent the CloudFront-to-EC2 traffic path.
-
-Therefore:
-
-    CloudFront -> VPC Origin -> EC2
-
-is independent of:
-
-    EC2 -> NAT -> Internet
-
----
-
-# 73. WAF Test
-
-Do not introduce aggressive blocking rules in a shared environment.
-
-Monitor WAF activity through:
-
-    WAF
-        |
-        v
-    CloudWatch metrics
-
-The objective is to confirm that legitimate CloudFront traffic remains functional.
-
----
-
-# PART 13 – TROUBLESHOOTING
-
-# 74. Private EC2 Has No Internet Access
-
-Check:
-
-1. Private subnet route table.
-2. Default route.
-3. NAT Gateway state.
-4. Public subnet route table.
-5. Internet Gateway.
-6. Security Group outbound rules.
-7. Network ACL.
-8. DNS configuration.
-
-Expected path:
-
-    EC2
-        |
-        v
-    Private Route Table
-        |
-        v
-    NAT Gateway
-        |
-        v
-    Public Subnet
-        |
-        v
-    Internet Gateway
-        |
-        v
-    Internet
-
----
-
-# 75. EC2 Does Not Appear in SSM
-
-Check:
-
-1. IAM role.
-2. AmazonSSMManagedInstanceCore.
-3. SSM Agent.
-4. DNS.
-5. Security Group outbound rules.
-6. NAT Gateway.
-7. Internet connectivity.
-
----
-
-# 76. CloudFront Cannot Reach EC2
-
-Check:
-
-1. EC2 state.
-2. Application port 80.
-3. Security Group.
-4. CloudFront managed prefix list.
-5. VPC Origin.
-6. VPC Origin status.
-7. CloudFront distribution.
-8. WAF.
-
----
-
-# 77. CloudFront Account Verification Error
-
-If the console or API reports:
-
-    Your account must be verified before you can add new CloudFront resources.
-
-This indicates an account-level CloudFront restriction.
-
-Contact AWS Support.
-
-Provide:
-
-- AWS Account ID
-- Exact error
-- Resource type
-- CloudFront VPC Origin requirement
-- POC/business purpose
-
-Do not modify the architecture simply because the account has not yet been verified.
-
----
-
-# 78. WAF Problems
-
-If legitimate traffic is blocked:
-
-Check:
-
-1. Web ACL association.
-2. Managed rule groups.
-3. WAF sampled requests.
-4. CloudWatch metrics.
-5. Rule action.
-6. CloudFront distribution.
-
-Do not disable all security controls without understanding the rule causing the block.
-
----
-
-# 79. Backup Failure
-
-Check:
-
-1. Backup plan.
-2. Backup selection.
-3. EC2 resource.
-4. Backup IAM role.
-5. Backup job status.
-6. Backup vault.
-
-A backup plan existing does not prove that backups are working.
-
-A completed backup job and successful restore test are stronger validation.
-
----
-
-# PART 14 – MANUAL RESOURCE INVENTORY
-
-# 80. Record Resource IDs
-
-After manual deployment, record:
-
-    AWS Account ID:
-
-    Region:
-
-    VPC ID:
-
-    Public Subnet ID:
-
-    Private Subnet ID:
-
-    Private Route Table ID:
-
-    NAT Gateway ID:
-
-    Elastic IP:
-
-    Security Group ID:
-
-    IAM Role:
-
-    EC2 Instance ID:
-
-    EC2 Private IP:
-
-    VPC Origin ID:
-
-    CloudFront Distribution ID:
-
-    CloudFront Domain:
-
-    WAF Web ACL ARN:
-
-    Backup Vault:
-
-    Backup Plan:
-
-    Recovery Point ID:
-
-Do not record passwords, access keys, secret keys, or private keys.
-
----
-
-# PART 15 – MANUAL CLEANUP
-
-# 81. Cleanup Order
-
-Recommended manual cleanup order:
-
-    CloudFront
-        |
-        v
-    WAF
-        |
-        v
-    Backup
-        |
-        v
-    EC2
-        |
-        v
-    Security Group
-        |
-        v
-    NAT Gateway
-        |
-        v
-    Elastic IP
-        |
-        v
-    Private Route Table
-        |
-        v
-    Private Subnet
-
-Do not delete the existing VPC if it is shared with other resources.
-
----
-
-# 82. Delete CloudFront Distribution
-
-Open:
-
-    CloudFront
-        |
-        v
-    Distributions
-
-Disable the distribution.
-
-Wait until the distribution is fully disabled.
-
-Then delete it.
-
----
-
-# 83. Delete VPC Origin
-
-After the CloudFront distribution no longer uses the VPC Origin, remove the VPC Origin if required.
-
-Verify that no other CloudFront distribution depends on it.
-
----
-
-# 84. Delete WAF
-
-Open:
-
-    WAF & Shield
-
-Select:
-
-    us-east-1
-
-Remove the association with CloudFront if required.
-
-Delete the Web ACL.
-
----
-
-# 85. Delete Backup
-
-Open:
-
-    AWS Backup
-
-Review:
-
-- Backup plans
-- Backup jobs
-- Recovery points
-- Backup vault
+Verify that the CloudFront distribution shows the WAF association.
 
 Important:
 
-Recovery points may remain according to the retention configuration.
+WAF is not a separate network hop.
 
-Do not delete backup data until the required retention and testing requirements are satisfied.
+It is associated with and evaluated at the CloudFront layer.
 
 ---
 
-# 86. Terminate EC2
+# 38. Step 32 – Validate WAF
 
 Open:
 
-    EC2
-        |
-        v
-    Instances
+AWS Console → WAF & Shield → Web ACLs
 
-Select the POC instance.
+Select:
 
-Terminate it.
+IFIS-POC-cloudfront-waf
+
+Review:
+
+- Web ACL status.
+- Managed rules.
+- Sampled requests.
+- CloudWatch metrics.
+
+For the initial POC, the default action is Allow and AWS Managed Rules provide the protection layer.
+
+Do not create aggressive custom blocking rules until application behavior has been tested.
+
+---
+
+# 39. Step 33 – Create AWS Backup
+
+AWS Backup protects the EC2 instance independently of CloudFront.
+
+Open:
+
+AWS Console → AWS Backup
+
+Create a Backup vault.
+
+Name:
+
+IFIS-POC-backup-vault
+
+Create the vault.
+
+Because the CloudFormation implementation uses Retain behavior for the backup vault, remember that deleting the stack may not delete the vault automatically.
+
+---
+
+# 40. Step 34 – Create AWS Backup Plan
+
+Open:
+
+AWS Backup → Backup plans
+
+Choose:
+
+Create backup plan
+
+Create a new plan.
+
+Plan name:
+
+IFIS-POC-backup-plan
+
+Create a backup rule.
+
+Rule name:
+
+WeeklyEC2Backup
+
+Backup vault:
+
+IFIS-POC-backup-vault
+
+Schedule:
+
+Weekly
+
+The documented production-style schedule is:
+
+15:00 UTC Sunday
+
+This corresponds to:
+
+00:00 Monday JST
+
+Retention:
+
+30 days
+
+Configure the start and completion windows according to the approved backup requirements.
+
+Create the backup plan.
+
+---
+
+# 41. Step 35 – Assign the EC2 Instance to the Backup Plan
+
+Select:
+
+Assign resources
+
+Choose:
+
+Resource type:
+EC2
+
+Select:
+
+IFIS-POC-EC2
+
+Alternatively, use resource tags if the environment is designed around tag-based backup selection.
+
+Verify that the EC2 instance is included in the backup selection.
+
+---
+
+# 42. Step 36 – Validate AWS Backup
+
+Open:
+
+AWS Backup → Protected resources
+
+Verify the EC2 instance appears.
+
+Check:
+
+Backup plan:
+IFIS-POC-backup-plan
+
+Backup vault:
+IFIS-POC-backup-vault
+
+A scheduled backup should eventually create a recovery point.
+
+For immediate POC validation, perform an on-demand backup if required.
+
+This may create additional AWS charges.
+
+---
+
+# 43. Step 37 – Validate CloudWatch
+
+Open:
+
+AWS Console → CloudWatch
+
+Check:
+
+Metrics
+
+The CloudWatch Agent should publish metrics under:
+
+IFIS/EC2
+
+Expected metrics include:
+
+- mem_used_percent
+- disk used_percent
+
+Root disk monitoring should be visible for:
+
+/
+
+The collection interval is:
+
+300 seconds
+
+CloudWatch Agent logs can be checked on the EC2 instance if metrics do not appear.
+
+---
+
+# 44. Step 38 – Validate the Complete Request Path
+
+Perform an end-to-end test:
+
+Client
+    →
+CloudFront
+    →
+WAF
+    →
+VPC Origin
+    →
+Private EC2
+    →
+HTTP service
+
+Open the CloudFront domain:
+
+https://<cloudfront-domain>
+
+Verify the expected application or test page is returned.
+
+Confirm:
+
+- CloudFront distribution is deployed.
+- WAF is associated.
+- VPC Origin is deployed.
+- EC2 is running.
+- EC2 has no public IP.
+- HTTP service is running.
+- Security Group allows CloudFront origin-facing traffic.
+- Private subnet route goes through NAT.
+- EC2 remains private.
+
+---
+
+# 45. Step 39 – Verify EC2 Cannot Be Accessed Directly From the Internet
+
+The EC2 instance must not have a public IP.
 
 Verify:
 
-    Instance state = Terminated
+EC2 → Instance → Networking
+
+Public IPv4 address:
+
+None
+
+Public DNS:
+
+None
+
+This is an important security validation.
+
+The intended public entry point is CloudFront.
 
 ---
 
-# 87. Delete Security Group
+# 46. Step 40 – Test Direct Private IP Access
 
-After the EC2 instance has been removed and no other resources use the Security Group:
+The EC2 private IP should not be directly reachable from the public Internet.
 
-Open:
+Do not expose the private EC2 address publicly.
 
-    EC2
-        |
-        v
-    Security Groups
+The expected access pattern is:
 
-Delete:
+Internet client
+    →
+CloudFront
+    →
+VPC Origin
+    →
+EC2
 
-    IFIS-POC-EC2-SG
+not:
 
----
-
-# 88. Delete NAT Gateway
-
-Open:
-
-    VPC
-        |
-        v
-    NAT Gateways
-
-Delete:
-
-    IFIS-POC NAT Gateway
-
-Wait until the NAT Gateway is deleted.
+Internet client
+    →
+EC2
 
 ---
 
-# 89. Release Elastic IP
+# 47. Step 41 – Test SSM Access
 
-Open:
+Start a Session Manager session.
 
-    VPC
-        |
-        v
-    Elastic IPs
+Verify that administrative access continues to work without:
 
-Release the Elastic IP associated with the POC NAT Gateway.
+- Public IP.
+- SSH.
+- Port 22.
+- Bastion host.
 
-This is important because unused Elastic IPs may incur charges depending on AWS pricing and account conditions.
-
----
-
-# 90. Delete Private Route Table
-
-Open:
-
-    VPC
-        |
-        v
-    Route Tables
-
-Delete:
-
-    IFIS-POC-private-rt
-
-Verify that it is not associated with any subnet before deletion.
+This confirms that the private EC2 management design is working.
 
 ---
 
-# 91. Delete Private Subnet
+# 48. Step 42 – Failure Test – Stop EC2
 
-Open:
+For POC testing, stop the EC2 instance.
 
-    VPC
-        |
-        v
-    Subnets
+Expected result:
 
-Delete:
+CloudFront cannot successfully serve the application while the origin EC2 is unavailable.
 
-    IFIS-POC-private-subnet
+This demonstrates that the current single-EC2 POC does not provide application high availability.
 
-Verify that the subnet is no longer required.
-
----
-
-# PART 16 – MANUAL VALIDATION CHECKLIST
-
-# 92. Network
-
-- [ ] Correct VPC
-- [ ] Correct public subnet
-- [ ] Internet Gateway attached
-- [ ] Public route table verified
-- [ ] Private subnet created
-- [ ] Public IP assignment disabled
-- [ ] Private route table created
-- [ ] Private subnet associated
-- [ ] NAT Gateway created
-- [ ] NAT Gateway Available
-- [ ] NAT route configured
-
----
-
-# 93. Security
-
-- [ ] Security Group created
-- [ ] HTTP port 80 configured
-- [ ] VPC source configured if required
-- [ ] CloudFront managed prefix list configured
-- [ ] Outbound traffic configured
-- [ ] EC2 has no public IP
-
----
-
-# 94. Compute
-
-- [ ] Amazon Linux 2023
-- [ ] Correct instance type
-- [ ] Private subnet
-- [ ] Public IP disabled
-- [ ] IAM role attached
-- [ ] Encrypted root volume
-- [ ] EC2 Running
-- [ ] SSM working
-- [ ] Session Manager working
-- [ ] Application listening on port 80
-- [ ] curl localhost works
-
----
-
-# 95. CloudFront
-
-- [ ] CloudFront account verified
-- [ ] VPC Origin created
-- [ ] VPC Origin Deployed
-- [ ] EC2 selected as origin
-- [ ] HTTP port 80
-- [ ] CloudFront distribution created
-- [ ] HTTP redirects to HTTPS
-- [ ] Distribution Enabled
-- [ ] CloudFront domain recorded
-- [ ] Application accessible
-
----
-
-# 96. WAF
-
-- [ ] WAF created in us-east-1
-- [ ] Scope = CloudFront
-- [ ] Default action = Allow
-- [ ] Common Rule Set configured
-- [ ] Known Bad Inputs configured
-- [ ] Linux Rule Set configured
-- [ ] SQLi Rule Set configured
-- [ ] Amazon IP Reputation List configured
-- [ ] WAF associated with CloudFront
-
----
-
-# 97. Backup
-
-- [ ] Backup vault created
-- [ ] Backup plan created
-- [ ] EC2 selected
-- [ ] Weekly schedule configured
-- [ ] Retention configured
-- [ ] On-demand backup completed
-- [ ] Recovery point exists
-- [ ] Restore test completed
-
----
-
-# 98. Final End-to-End Validation
+Start the EC2 instance again.
 
 Verify:
 
-    Browser
-        |
-        v
-    CloudFront
-        |
-        v
-    WAF
-        |
-        v
-    VPC Origin
-        |
-        v
-    Private EC2
-        |
-        v
-    Application
-
-Separately verify:
-
-    Private EC2
-        |
-        v
-    NAT Gateway
-        |
-        v
-    Internet
-
-And:
-
-    Private EC2
-        |
-        +---- SSM
-        |
-        +---- CloudWatch
-        |
-        +---- AWS Backup
-
-All paths should be validated independently.
+- EC2 becomes running.
+- SSM returns.
+- HTTP service starts.
+- CloudFront can reach the origin again.
 
 ---
 
-# 99. Difference Between Manual and CloudFormation Deployment
+# 49. Step 43 – Failure Test – Remove NAT Route
 
-| Area | Manual | CloudFormation |
-|---|---|---|
-| Creation | Console clicks | YAML |
-| Repeatability | Low | High |
-| Version control | Limited | Yes |
-| Parameters | Manual | CloudFormation parameters |
-| Dependencies | Human-managed | Template-managed |
-| Replication | More effort | Easier |
-| Troubleshooting | Good for learning | Good for infrastructure consistency |
-| Recommended for production | Usually not | Yes |
-| Recommended for learning | Yes | Yes |
+For controlled testing only, temporarily remove:
 
----
+0.0.0.0/0 → NAT Gateway
 
-# 100. When to Use Manual Deployment
+from the private route table.
 
-Use the manual process when:
+Expected effect:
 
-- Learning AWS
-- Understanding how a service works
-- Troubleshooting CloudFormation
-- Testing a resource configuration
-- Demonstrating the architecture
-- Investigating account restrictions
+- EC2 loses normal outbound Internet connectivity.
+- Package downloads may fail.
+- SSM connectivity may eventually fail if no VPC endpoints exist.
+- CloudWatch Agent connectivity may fail.
+- CloudFront-to-EC2 traffic may still be possible because CloudFront VPC Origin traffic is inbound to the private resource and does not require NAT.
+
+Restore the NAT route after testing.
 
 ---
 
-# 101. When to Use CloudFormation
+# 50. Step 44 – Failure Test – Stop NAT Gateway
 
-Use CloudFormation when:
+For controlled testing only, stop or remove the NAT Gateway if required.
 
-- Deploying repeatable environments
-- Deploying client infrastructure
-- Maintaining infrastructure as code
-- Replicating across AWS accounts
-- Replicating across Regions
-- Reviewing infrastructure changes
-- Maintaining configuration consistency
+Expected result:
+
+Private EC2 loses outbound connectivity.
+
+This demonstrates the dependency:
+
+Private EC2
+    →
+Private Route Table
+    →
+NAT Gateway
+    →
+Internet Gateway
+    →
+Internet
+
+Restore the NAT configuration after testing.
+
+NAT Gateway creation and usage may incur AWS charges.
 
 ---
 
-# 102. Important Reusability Rule
+# 51. Step 45 – Failure Test – Stop HTTP Service
 
-Manual deployment should not become the permanent source of truth for the architecture.
+Inside the SSM session:
 
-Once the correct manual configuration is understood and validated, the equivalent configuration should be represented in CloudFormation wherever practical.
+    systemctl stop httpd
 
-The CloudFormation templates should remain the primary reusable infrastructure definition.
+Test the CloudFront URL.
+
+Expected result:
+
+The application response fails because the origin web service is unavailable.
+
+Start the service again:
+
+    systemctl start httpd
+
+Test CloudFront again.
 
 ---
 
-# 103. Related Documentation
+# 52. Step 46 – Backup Restore Test
 
-Architecture:
+If a recovery point has been created, perform a restore test.
 
-    docs/architecture.md
+Open:
+
+AWS Backup → Backup vaults
+
+Select:
+
+IFIS-POC-backup-vault
+
+Select a recovery point.
+
+Choose:
+
+Restore
+
+Restore the EC2 instance to a test configuration.
+
+Do not overwrite the working POC instance unless specifically required.
+
+Validate:
+
+- EC2 is restored.
+- Networking is correct.
+- IAM role is correct.
+- Security Group is correct.
+- Application files are present.
+- Application starts.
+- SSM works.
+- CloudWatch works.
+
+Record the restore result.
+
+A backup that has never been restored should not be treated as a fully validated recovery process.
+
+---
+
+# 53. Step 47 – Route 53 Configuration
+
+Route 53 is optional for the POC.
+
+If a DNS name is required:
+
+Open:
+
+AWS Console → Route 53
+
+Create or use the appropriate hosted zone.
+
+Create an alias record pointing to the CloudFront distribution.
+
+Example:
+
+Application domain:
+
+app.example.com
+
+Target:
+
+CloudFront distribution
+
+Do not create a Route 53 record unless a domain is available and DNS testing is required.
+
+---
+
+# 54. Step 48 – Final Validation Checklist
+
+Before declaring the manual deployment successful, verify all of the following.
+
+## Network
+
+- VPC exists.
+- VPC CIDR is correct.
+- Internet Gateway is attached.
+- Public subnet exists.
+- Private subnet exists.
+- Private subnet has public IP assignment disabled.
+- Private route table exists.
+- Private subnet is associated with private route table.
+- NAT Gateway is available.
+- NAT Gateway is in public subnet.
+- Private route table has 0.0.0.0/0 → NAT Gateway.
+- Public subnet route table has 0.0.0.0/0 → Internet Gateway.
+
+## EC2
+
+- Amazon Linux 2023 is used.
+- EC2 is in private subnet.
+- EC2 has no public IP.
+- EC2 uses correct Security Group.
+- EC2 uses IAM role.
+- Root volume is gp3.
+- Root volume is encrypted.
+- Root volume size is 20 GiB for the documented POC.
+- IMDSv2 is required.
+- Termination protection is enabled.
+- User Data completed successfully.
+- HTTP service is running.
+
+## Security
+
+- Port 80 is not open to 0.0.0.0/0.
+- CloudFront managed prefix list is allowed.
+- VPC CIDR access is configured as required.
+- Outbound traffic is controlled according to the POC design.
+- No public IP is assigned to EC2.
+- SSH is not required.
+- SSM is used for administration.
+
+## Systems Manager
+
+- EC2 appears as a managed node.
+- Session Manager connection works.
+- SSM Agent is running.
+
+## CloudWatch
+
+- CloudWatch Agent is running.
+- IFIS/EC2 namespace exists.
+- Memory metrics are available.
+- Root disk metrics are available.
+- Metrics are collected every 300 seconds.
+
+## CloudFront
+
+- VPC Origin exists.
+- VPC Origin status is deployed.
+- Origin points to private EC2.
+- HTTP port 80 is configured.
+- CloudFront distribution is deployed.
+- Viewer redirects HTTP to HTTPS.
+- CloudFront domain is reachable.
+
+## WAF
+
+- WAF is created in us-east-1.
+- Scope is CLOUDFRONT.
+- Web ACL is associated with CloudFront.
+- Common Rule Set is enabled.
+- Known Bad Inputs Rule Set is enabled.
+- Linux Rule Set is enabled.
+- SQLi Rule Set is enabled.
+- Amazon IP Reputation List is enabled.
+
+## Backup
+
+- Backup vault exists.
+- Backup plan exists.
+- EC2 is assigned to the plan.
+- Weekly schedule is configured.
+- Retention is 30 days.
+- Recovery point is created or scheduled.
+- Restore testing is completed if required.
+
+---
+
+# 55. Troubleshooting
+
+## Problem: EC2 does not appear in Systems Manager
+
+Check:
+
+1. EC2 IAM role.
+2. AmazonSSMManagedInstanceCore policy.
+3. SSM Agent.
+4. NAT Gateway.
+5. Private route table.
+6. Security Group outbound access.
+7. DNS.
+8. EC2 User Data.
+
+Inside Session Manager is not possible if SSM itself is unavailable, so use EC2 console status checks and CloudWatch/log information where available.
+
+---
+
+## Problem: User Data did not run correctly
+
+Check:
+
+EC2 → Actions → Monitor and troubleshoot → Get system log
+
+Also check:
+
+    /var/log/cloud-init-output.log
+
+and:
+
+    /var/log/cloud-init.log
+
+Verify the User Data script syntax.
+
+---
+
+## Problem: CloudWatch metrics are missing
+
+Check:
+
+    systemctl status amazon-cloudwatch-agent
+
+Check configuration:
+
+    cat /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
+Check CloudWatch Agent logs.
+
+Verify:
+
+- IAM policy.
+- NAT connectivity.
+- DNS.
+- Agent configuration.
+- Agent service status.
+
+---
+
+## Problem: CloudFront cannot reach EC2
+
+Check all of the following:
+
+1. EC2 is running.
+2. HTTP service is running.
+3. Port 80 is listening.
+4. Security Group allows the CloudFront managed prefix list.
+5. VPC Origin is deployed.
+6. VPC Origin points to the correct EC2.
+7. EC2 private DNS/private endpoint is correct.
+8. Network ACLs are not blocking traffic.
+9. CloudFront distribution is deployed.
+
+Test locally:
+
+    curl http://localhost
+
+---
+
+## Problem: CloudFront returns an origin error
+
+Check:
+
+- EC2 HTTP service.
+- Security Group.
+- VPC Origin.
+- CloudFront origin protocol.
+- Port 80.
+- EC2 private connectivity.
+- Application logs.
+
+Do not immediately make the EC2 public to troubleshoot the issue.
+
+---
+
+## Problem: NAT Gateway does not provide Internet access
+
+Check:
+
+1. NAT Gateway state is Available.
+2. NAT Gateway is in a public subnet.
+3. Public subnet route table has 0.0.0.0/0 → Internet Gateway.
+4. Private route table has 0.0.0.0/0 → NAT Gateway.
+5. EC2 Security Group allows outbound traffic.
+6. Network ACLs permit traffic.
+7. DNS resolution is enabled.
+
+---
+
+## Problem: WAF cannot be created
+
+Verify that the AWS Console region is:
+
+us-east-1
+
+CloudFront WAF uses the CLOUDFRONT scope.
+
+---
+
+## Problem: Backup does not run
+
+Check:
+
+- EC2 is assigned to the backup plan.
+- Backup role exists.
+- Backup vault exists.
+- Backup schedule is correct.
+- Backup service permissions are correct.
+- Backup job status.
+- Backup job start/completion windows.
+
+---
+
+# 56. Cost Considerations
+
+The following resources can generate ongoing or usage-based AWS charges:
+
+- NAT Gateway.
+- Elastic IP associated with NAT Gateway.
+- EC2.
+- EBS.
+- CloudWatch metrics/logs.
+- CloudFront.
+- WAF.
+- AWS Backup storage.
+- Backup recovery points.
+- Data transfer.
+
+For a temporary POC, delete unused resources after testing.
+
+NAT Gateway is especially important to clean up because it can generate charges even when the EC2 instance is idle.
+
+---
+
+# 57. Cleanup Procedure
+
+Before deleting resources, understand the dependencies.
+
+Recommended cleanup order:
+
+1. Remove Route 53 records if created.
+2. Disable or remove CloudFront WAF association.
+3. Delete CloudFront distribution.
+4. Wait until CloudFront distribution is disabled/deleted.
+5. Delete CloudFront VPC Origin.
+6. Delete AWS Backup plan/selection.
+7. Delete backup recovery points if no longer required.
+8. Delete backup vault only if retention is no longer required.
+9. Stop EC2.
+10. Disable termination protection.
+11. Terminate EC2.
+12. Delete EC2 Security Group.
+13. Delete IAM instance profile/role if no longer required.
+14. Delete NAT Gateway.
+15. Release the NAT Gateway Elastic IP.
+16. Delete private route table.
+17. Delete private subnet.
+
+Do not delete the existing VPC if it is shared with other workloads.
+
+---
+
+# 58. Important Cleanup Note for AWS Backup
+
+The CloudFormation implementation uses:
+
+DeletionPolicy:
+Retain
+
+for the backup vault.
+
+Therefore, the backup vault may remain after stack deletion.
+
+Manual deployment should also treat backup recovery points as retained data until the required retention period or cleanup decision has been completed.
+
+Do not delete recovery points that are still required for testing, compliance, or recovery.
+
+---
+
+# 59. Manual Deployment vs CloudFormation
+
+The manual deployment and CloudFormation deployment should create functionally equivalent resources.
+
+| Manual Resource | CloudFormation Stack |
+|---|---|
+| Private subnet | 01-network.yaml |
+| Private route table | 01-network.yaml |
+| NAT Gateway | 01-network.yaml |
+| IAM role | 02-compute.yaml |
+| Instance profile | 02-compute.yaml |
+| EC2 Security Group | 02-compute.yaml |
+| EC2 | 02-compute.yaml |
+| User Data | 02-compute.yaml |
+| CloudFront VPC Origin | 03-cloudfront.yaml |
+| CloudFront Distribution | 03-cloudfront.yaml |
+| WAF | 04-waf.yaml |
+| AWS Backup | 05-backup.yaml |
+
+This mapping is useful when troubleshooting.
+
+If a manual deployment works but the CloudFormation deployment fails, compare the resource configurations.
+
+If both fail, investigate the underlying AWS architecture or account configuration.
+
+---
+
+# 60. Important Difference Between Manual and CloudFormation Deployment
+
+Manual deployment requires the engineer to configure each resource through the AWS Console.
+
+CloudFormation deployment defines the desired configuration in YAML and creates the resources automatically.
+
+Manual deployment:
+
+    Engineer
+        |
+        v
+    AWS Console
+        |
+        v
+    Individual AWS Resources
 
 CloudFormation deployment:
 
-    docs/cloudformation-deployment-guide.md
+    YAML Templates
+        |
+        v
+    CloudFormation
+        |
+        v
+    AWS Resources
 
-Validation:
-
-    docs/validation-checklist.md
-
-Troubleshooting:
-
-    docs/troubleshooting.md
-
-CloudFormation templates:
-
-    cloudformation/
+The architecture should remain the same.
 
 ---
 
-# 104. Document Ownership
+# 61. POC Limitations
 
-Project:
+The current POC has some intentional limitations.
 
-    IFIS
+## Single EC2
 
-Environment:
+Only one EC2 instance is used.
 
-    POC
+This means there is no application-level high availability.
 
-Primary Region:
+If the EC2 instance fails, the CloudFront origin becomes unavailable.
 
-    ap-south-1
+## Single NAT Gateway
 
-CloudFront WAF Region:
+The POC uses one NAT Gateway.
 
-    us-east-1
+A production multi-AZ architecture may require additional NAT Gateways and routing.
 
-Owner:
+## Existing VPC
 
-    Sohan
+The POC uses an existing VPC rather than creating a completely new production network.
 
-Repository:
+## No Application Load Balancer
 
-    sohan_IFIS_project
+CloudFront connects directly to the private EC2 through VPC Origin.
 
-This document should be updated whenever the manual AWS Console procedure changes.
+A production architecture may use an ALB depending on application requirements.
+
+## No Multi-AZ EC2
+
+The POC EC2 is deployed in one Availability Zone.
+
+## Backup Is Not High Availability
+
+AWS Backup provides recovery capability.
+
+It does not provide automatic application failover.
+
+---
+
+# 62. Production Considerations
+
+Before using this architecture in production, evaluate:
+
+- Multiple Availability Zones.
+- Multiple EC2 instances.
+- Auto Scaling.
+- Application Load Balancer.
+- Multiple NAT Gateways.
+- VPC endpoints for AWS services.
+- Centralized logging.
+- CloudWatch alarms.
+- SNS notifications.
+- WAF logging.
+- CloudFront logging.
+- Route 53 health checks where required.
+- AWS Backup vault protection.
+- Cross-account backup.
+- Cross-region disaster recovery.
+- KMS key management.
+- IAM least privilege.
+- Security Group hardening.
+- Network ACL requirements.
+- Patch management.
+- SSM automation.
+- Incident response.
+- Disaster recovery testing.
+- Cost monitoring.
+
+---
+
+# 63. Reusing This Manual Design in Another Environment
+
+When deploying the architecture into another AWS account or region, do not copy resource IDs.
+
+Collect the following from the target environment:
+
+- AWS account ID.
+- Region.
+- VPC ID.
+- VPC CIDR.
+- Public subnet ID.
+- Public subnet CIDR.
+- Availability Zone.
+- Private subnet CIDR.
+- CloudFront managed prefix list ID.
+- EC2 AMI.
+- Instance type.
+- IAM requirements.
+- Backup requirements.
+- Domain name if Route 53 is required.
+
+Then recreate the architecture using the target environment's resources.
+
+---
+
+# 64. Reusing the Architecture Across Accounts
+
+For another AWS account:
+
+1. Verify account access.
+2. Select target region.
+3. Identify target VPC.
+4. Identify public subnet.
+5. Create private subnet.
+6. Create NAT Gateway.
+7. Create IAM role.
+8. Create Security Group.
+9. Launch EC2.
+10. Configure User Data.
+11. Configure CloudFront VPC Origin.
+12. Configure CloudFront.
+13. Create CloudFront WAF in us-east-1.
+14. Configure Backup.
+15. Validate the complete architecture.
+
+Do not reuse:
+
+- EC2 IDs.
+- VPC IDs.
+- Subnet IDs.
+- Route table IDs.
+- NAT Gateway IDs.
+- Elastic IP allocation IDs.
+- Security Group IDs.
+- IAM role ARNs.
+- CloudFront distribution IDs.
+- WAF ARNs.
+
+These are account/environment-specific.
+
+---
+
+# 65. Reusing the Architecture Across Regions
+
+For another region:
+
+1. Confirm CloudFront VPC Origin supports the target region/resource configuration.
+2. Identify a suitable VPC.
+3. Identify a public subnet.
+4. Create a private subnet.
+5. Create NAT Gateway.
+6. Configure routing.
+7. Create IAM role.
+8. Launch EC2.
+9. Configure User Data.
+10. Verify SSM.
+11. Verify CloudWatch.
+12. Create VPC Origin.
+13. Configure CloudFront.
+14. Configure CloudFront WAF in us-east-1.
+15. Configure Backup in the workload region.
+16. Test the complete path.
+
+Do not assume the CloudFront managed prefix list ID will be identical in every environment.
+
+Verify it in the target environment.
+
+---
+
+# 66. Final Architecture Validation
+
+The POC is considered manually deployed successfully when all of the following are true:
+
+    Internet
+       |
+       v
+    CloudFront
+       |
+       v
+    WAF
+       |
+       v
+    VPC Origin
+       |
+       v
+    Private EC2
+       |
+       +---- SSM works
+       |
+       +---- CloudWatch works
+       |
+       +---- HTTP service works
+       |
+       +---- No public IP
+       |
+       +---- NAT outbound connectivity
+       |
+       +---- AWS Backup configured
+
+The most important end-to-end test is:
+
+    Client
+       |
+       v
+    CloudFront HTTPS URL
+       |
+       v
+    WAF
+       |
+       v
+    VPC Origin
+       |
+       v
+    Private EC2 HTTP service
+
+At the same time:
+
+    Private EC2
+       |
+       +---- SSM
+       |
+       +---- CloudWatch
+       |
+       +---- NAT
+       |
+       +---- AWS Backup
+
+must operate as expected.
+
+---
+
+# 67. Related Documentation
+
+See the following documents in this repository:
+
+- architecture.md
+- cloudformation-deployment-guide.md
+- validation-checklist.md
+- troubleshooting.md
+
+CloudFormation templates:
+
+- cloudformation/01-network.yaml
+- cloudformation/02-compute.yaml
+- cloudformation/03-cloudfront.yaml
+- cloudformation/04-waf.yaml
+- cloudformation/05-backup.yaml
+
+---
+
+# 68. Document Maintenance
+
+Update this document when:
+
+- AWS console workflow changes.
+- Architecture changes.
+- EC2 configuration changes.
+- Security Group rules change.
+- CloudFront configuration changes.
+- WAF rules change.
+- Backup policy changes.
+- New regions are supported.
+- New AWS accounts are onboarded.
+- Production requirements differ from the POC.
+
+The manual guide should remain aligned with the CloudFormation implementation.
+
+When a resource is changed in CloudFormation, review the corresponding manual deployment section and update it if required.
