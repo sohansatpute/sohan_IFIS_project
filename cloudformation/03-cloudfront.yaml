@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  IFIS AWS Infrastructure POC - CloudFront Stack.
+  Creates a CloudFront distribution with a VPC Origin
+  targeting the private EC2 instance from the Compute stack.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Stack References
+        Parameters:
+          - ComputeStackName
+
+      - Label:
+          default: CloudFront Configuration
+        Parameters:
+          - WebAclArn
+
+      - Label:
+          default: Project Information
+        Parameters:
+          - ProjectName
+          - Environment
+          - Owner
+
+Parameters:
+
+  ComputeStackName:
+    Type: String
+    Default: IFIS-POC-compute
+    Description: Name of the Compute CloudFormation stack.
+
+  WebAclArn:
+    Type: String
+    Default: ""
+    Description: >
+      Optional ARN of a CloudFront-scoped AWS WAF Web ACL.
+      Leave blank for initial deployment.
+
+  ProjectName:
+    Type: String
+    Default: IFIS-POC
+    Description: Project name used for resource tagging.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - uat
+      - prod
+    Description: Deployment environment.
+
+  Owner:
+    Type: String
+    Default: Sohan
+    Description: Resource owner.
+
+Conditions:
+
+  HasWebAcl: !Not
+    - !Equals
+      - !Ref WebAclArn
+      - ""
+
+Resources:
+
+  CloudFrontVpcOrigin:
+    Type: AWS::CloudFront::VpcOrigin
+    Properties:
+      VpcOriginEndpointConfig:
+        Name: !Sub "${AWS::StackName}-VpcOrigin"
+        Arn: !ImportValue
+          Fn::Sub: "${ComputeStackName}-Ec2Arn"
+        HTTPPort: 80
+        HTTPSPort: 443
+        OriginProtocolPolicy: http-only
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+
+      DistributionConfig:
+
+        Enabled: true
+
+        Comment: !Sub "${ProjectName} ${Environment} CloudFront"
+
+        PriceClass: PriceClass_100
+
+        HttpVersion: http2and3
+
+        IPV6Enabled: false
+
+        Origins:
+
+          - Id: !Sub "${AWS::StackName}-VpcOrigin"
+
+            DomainName: !ImportValue
+              Fn::Sub: "${ComputeStackName}-PrivateDnsName"
+
+            VpcOriginConfig:
+              VpcOriginId: !Ref CloudFrontVpcOrigin
+
+        DefaultCacheBehavior:
+
+          TargetOriginId: !Sub "${AWS::StackName}-VpcOrigin"
+
+          ViewerProtocolPolicy: redirect-to-https
+
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+
+          CachedMethods:
+            - GET
+            - HEAD
+
+          Compress: true
+
+          ForwardedValues:
+            QueryString: true
+
+          MinTTL: 0
+          DefaultTTL: 0
+          MaxTTL: 0
+
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+        WebACLId: !If
+          - HasWebAcl
+          - !Ref WebAclArn
+          - !Ref AWS::NoValue
+
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: none
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Distribution"
+
+        - Key: Project
+          Value: !Ref ProjectName
+
+        - Key: Environment
+          Value: !Ref Environment
+
+        - Key: Owner
+          Value: !Ref Owner
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+
+  VpcOriginId:
+    Description: CloudFront VPC Origin ID.
+    Value: !Ref CloudFrontVpcOrigin
+
+  DistributionId:
+    Description: CloudFront distribution ID.
+    Value: !Ref CloudFrontDistribution
+
+  DistributionDomainName:
+    Description: CloudFront distribution domain name.
+    Value: !GetAtt CloudFrontDistribution.DomainName
