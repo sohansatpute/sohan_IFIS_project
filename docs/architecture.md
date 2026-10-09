@@ -1,1610 +1,262 @@
 # IFIS POC – AWS Architecture
 
-## 1. Document Purpose
+## 1. Purpose
 
-This document describes the AWS architecture implemented and validated for the IFIS project Proof of Concept (POC).
-
-The purpose of this POC is to:
-
-- Understand the existing IFIS AWS architecture.
-- Recreate the architecture in a separate AWS account/environment.
-- Validate the architecture using actual AWS resources.
-- Use reusable AWS CloudFormation templates.
-- Provide a repeatable deployment approach for future environments.
-- Document networking, security, compute, CloudFront, WAF, monitoring, backup, and operational considerations.
-
-This document describes the POC architecture and should not be treated as a production deployment specification without reviewing environment-specific requirements.
-
----
+This document describes the intended and partially implemented AWS architecture for the IFIS / W2P-Japan Proof of Concept (POC), including network design, CloudFormation responsibilities, security, monitoring, backup, validation, and operations. It is not a production specification. Distinguish resources confirmed deployed from resources whose deployment or end-to-end validation is still pending.
 
 ## 2. Project Information
 
-| Item | Value |
+| Item | POC value / note |
 |---|---|
 | Project | W2P-Japan / IFIS |
 | Environment | POC |
-| AWS Account | 963910217596 |
-| Primary POC Region | ap-south-1 |
-| CloudFront WAF Region | us-east-1 |
-| VPC | vpc-06900f62513eff63 |
-| VPC CIDR | 172.31.0.0/16 |
-| Repository | sohan_IFIS_project |
+| Primary infrastructure region | `ap-south-1` |
+| CloudFront-scoped AWS WAF region | `us-east-1` |
 | Infrastructure as Code | AWS CloudFormation |
+| Repository | `sohan_IFIS_project` |
 
----
+The original notes included an AWS account ID and live resource identifiers. Keep these in an access-controlled POC inventory if required; avoid publishing account IDs or live resource IDs in public documentation. All resource IDs below are POC-specific and must not be reused for another environment.
 
 ## 3. Architecture Overview
 
-The target architecture provides a public entry point through Amazon CloudFront while keeping the application EC2 instance private inside the VPC.
-
-The main traffic flow is:
+The application EC2 instance is intended to remain in a private subnet. CloudFront is the public viewer entry point, and AWS WAF is associated with the CloudFront distribution to inspect applicable requests. CloudFront reaches the private EC2 origin through a CloudFront VPC Origin.
 
 ```text
-Internet User
-     |
-     v
-Route 53
-     |
-     v
-CloudFront
-     |
-     v
-AWS WAF
-     |
-     v
+Viewer / Internet
+       |
+       v
+Amazon CloudFront  <---- AWS WAF protection associated with distribution
+       |
+       v
 CloudFront VPC Origin
-     |
-     v
-Private EC2
-     |
-     v
-NAT Gateway
-     |
-     v
-Internet / AWS Services
-```
-
-AWS Backup and CloudWatch operate as supporting services.
-
-```text
-                         Internet
-                            |
-                            v
-                       Route 53
-                            |
-                            v
-                      CloudFront
-                            |
-                            v
-                     AWS WAF
-                            |
-                            v
-                    VPC Origin
-                            |
-                            v
-                +---------------------+
-                |       VPC           |
-                |                     |
-                |  Private Subnet     |
-                |                     |
-                |   +-------------+   |
-                |   | Private EC2 |   |
-                |   +-------------+   |
-                |          |          |
-                |          v          |
-                |   NAT Gateway       |
-                |          |          |
-                +----------|----------+
-                           |
-                           v
-                       Internet
-```
-
----
-
-## 4. Architecture Components
-
-The POC contains the following major AWS components:
-
-1. Amazon VPC
-2. Public subnet
-3. Private subnet
-4. Private route table
-5. NAT Gateway
-6. Elastic IP
-7. Security Group
-8. Amazon EC2
-9. IAM Role
-10. IAM Instance Profile
-11. AWS Systems Manager
-12. Amazon CloudWatch
-13. Amazon CloudFront
-14. CloudFront VPC Origin
-15. AWS WAF
-16. AWS Backup
-17. Amazon Route 53
-
-Not every component is deployed in every stage of the POC.
-
-CloudFront resource creation is currently dependent on AWS account verification.
-
----
-
-# 5. Network Architecture
-
-## 5.1 VPC
-
-The POC uses an existing VPC.
-
-| Property | Value |
-|---|---|
-| VPC ID | vpc-06900f62513eff63 |
-| CIDR | 172.31.0.0/16 |
-| Region | ap-south-1 |
-
-The VPC is not created by the POC CloudFormation network stack.
-
-Instead, the existing VPC ID is supplied as a parameter.
-
-This makes the CloudFormation template reusable in another AWS account or environment.
-
----
-
-## 5.2 Existing Public Subnet
-
-The NAT Gateway is deployed into an existing public subnet.
-
-| Property | Value |
-|---|---|
-| Subnet ID | subnet-0d6445bd9f644383b |
-| CIDR | 172.31.0.0/20 |
-| Availability Zone | ap-south-1b |
-| Purpose | NAT Gateway |
-
-The subnet already has public routing through an Internet Gateway.
-
----
-
-## 5.3 Private Subnet
-
-A dedicated private subnet is created for the application EC2 instance.
-
-| Property | Value |
-|---|---|
-| CIDR | 172.31.48.0/20 |
-| Availability Zone | ap-south-1b |
-| Public IP | Disabled |
-| Route Table | Dedicated private route table |
-
-The EC2 instance is launched into this subnet.
-
----
-
-## 5.4 Private Route Table
-
-The private subnet uses a dedicated route table.
-
-The important routes are:
-
-```text
-Destination        Target
---------------------------------
-172.31.0.0/16      local
-0.0.0.0/0          NAT Gateway
-```
-
-The local route allows communication within the VPC.
-
-The default route sends outbound Internet traffic through the NAT Gateway.
-
----
-
-## 5.5 NAT Gateway
-
-The POC uses a NAT Gateway for outbound connectivity from the private subnet.
-
-| Property | Value |
-|---|---|
-| NAT Gateway | nat-0702c9152a11907d3 |
-| Location | Public subnet |
-| Purpose | Outbound connectivity |
-
-The NAT Gateway is an outbound-only path from the private subnet.
-
-It does not provide inbound Internet access to the EC2 instance.
-
----
-
-## 5.6 NAT Traffic Flow
-
-The traffic flow is:
-
-```text
-Private EC2
-    |
-    v
-Private Route Table
-    |
-    v
-NAT Gateway
-    |
-    v
-Internet Gateway
-    |
-    v
-Internet
-```
-
-The Internet cannot directly initiate a connection to the private EC2 instance through the NAT Gateway.
-
----
-
-# 6. Private EC2 Architecture
-
-## 6.1 EC2 Purpose
-
-The EC2 instance represents the private application/server workload.
-
-The instance does not have a public IP address.
-
-CloudFront is intended to provide the public entry point.
-
----
-
-## 6.2 Current POC EC2
-
-| Property | Value |
-|---|---|
-| Instance ID | i-043ba12e8364ece96 |
-| Region | ap-south-1 |
-| Network | Private subnet |
-| Public IP | None |
-| Operating System | Amazon Linux 2023 |
-| Root Volume | Encrypted gp3 |
-| Management | AWS Systems Manager |
-
-The instance ID is environment-specific and must not be hardcoded in reusable templates.
-
----
-
-## 6.3 Private IP Address
-
-The EC2 private IP address is allocated by AWS.
-
-The architecture does not depend on a fixed EC2 private IP.
-
-CloudFormation obtains the instance information dynamically.
-
-This is important for reusability because a future deployment can create a different private IP.
-
----
-
-## 6.4 EC2 Internet Access
-
-The EC2 instance does not have a public IP.
-
-When the instance needs outbound connectivity, traffic follows:
-
-```text
-EC2
- |
- v
-Private Route Table
- |
- v
-NAT Gateway
- |
- v
-Internet Gateway
- |
- v
-Internet
-```
-
-This outbound connectivity is also important for initial configuration and AWS service communication when VPC endpoints are not being used.
-
----
-
-# 7. EC2 Security Group
-
-The EC2 security group controls inbound and outbound traffic.
-
-## 7.1 Inbound HTTP
-
-HTTP TCP port 80 is allowed from the VPC CIDR.
-
-```text
-Protocol: TCP
-Port: 80
-Source: 172.31.0.0/16
-```
-
-This supports internal VPC connectivity and POC testing.
-
----
-
-## 7.2 CloudFront Origin Access
-
-HTTP TCP port 80 is also allowed from the CloudFront managed prefix list.
-
-```text
-Protocol: TCP
-Port: 80
-Source:
-com.amazonaws.global.cloudfront.origin-facing
-```
-
-Current managed prefix list ID:
-
-```text
-pl-9aa247f3
-```
-
-This allows CloudFront origin-facing traffic to reach the private EC2 origin.
-
----
-
-## 7.3 Outbound Traffic
-
-Outbound traffic is allowed.
-
-The POC security group uses:
-
-```text
-Outbound:
-All traffic
-Destination:
-0.0.0.0/0
-```
-
-This supports outbound connectivity through the NAT Gateway.
-
----
-
-# 8. CloudFront Architecture
-
-## 8.1 Purpose
-
-Amazon CloudFront provides the public application entry point.
-
-The intended traffic flow is:
-
-```text
-User
- |
- v
-CloudFront
- |
- v
-VPC Origin
- |
- v
-Private EC2
-```
-
-The EC2 instance itself remains private.
-
----
-
-## 8.2 CloudFront VPC Origin
-
-CloudFront VPC Origin allows CloudFront to connect to resources inside a private VPC.
-
-The POC uses the private EC2 instance as the origin resource.
-
-The VPC Origin points to the EC2 resource rather than exposing the EC2 instance publicly.
-
----
-
-## 8.3 VPC Origin Endpoint
-
-The manually created POC VPC Origin previously displayed an endpoint similar to:
-
-```text
-ip-172-31-63-241.ap-south-1.compute.internal
-```
-
-The actual endpoint is AWS-managed and should not be treated as a permanent value.
-
----
-
-## 8.4 VPC Origin Protocol
-
-The intended configuration is:
-
-```text
-CloudFront -> VPC Origin
-Protocol: HTTP
-Port: 80
-```
-
-The public viewer connection is handled separately.
-
----
-
-# 9. CloudFront Viewer Protocol
-
-The intended CloudFront viewer behavior is:
-
-```text
-HTTP  -> HTTPS redirect
-HTTPS -> Application
-```
-
-This means users are redirected from HTTP to HTTPS.
-
-CloudFront handles the public TLS connection.
-
-The connection from CloudFront to the private EC2 origin is configured separately.
-
----
-
-# 10. CloudFront Caching
-
-The POC CloudFront configuration disables application caching.
-
-The purpose is to keep the POC behavior simple and similar to the target application architecture.
-
-CloudFront forwards requests to the origin rather than serving cached application responses.
-
-Caching can be designed separately for future production optimization.
-
----
-
-# 11. CloudFront Distribution and VPC Origin Relationship
-
-A CloudFront distribution can have multiple origins.
-
-Each private EC2 origin used directly as a CloudFront VPC Origin generally requires its corresponding VPC Origin configuration.
-
-A new EC2 instance does not automatically require a new CloudFront distribution.
-
-For example:
-
-```text
-CloudFront Distribution
        |
-       +---- VPC Origin 1 ---- EC2 Application 1
+       v
+Private EC2 web server
        |
-       +---- VPC Origin 2 ---- EC2 Application 2
+       +---- AWS Systems Manager (administration)
+       +---- Amazon CloudWatch (monitoring)
+       +---- AWS Backup (scheduled recovery points)
+       |
+       +---- Private route table -> NAT Gateway -> Internet Gateway -> Internet
+                                      outbound connectivity only
 ```
 
-CloudFront behaviors can determine which origin receives a request.
+Route 53 is optional for a custom DNS name. It is not a required hop for every CloudFront request, and should only be described as deployed if configured. A distribution can be accessed through its default CloudFront domain.
 
----
+**Important traffic distinction:** NAT Gateway provides outbound connectivity from the private subnet. It is not the path CloudFront uses to reach the private EC2 origin. The EC2 instance should not have a public IPv4 address.
 
-# 12. NAT Gateway vs VPC Origin
+## 4. Network Architecture
 
-These two components have different purposes.
+### 4.1 Existing VPC
 
-## CloudFront VPC Origin
+The network stack uses an existing VPC supplied as a parameter; it does not create the VPC itself.
 
-Used for:
+| Property | Current POC reference |
+|---|---|
+| VPC ID | `vpc-06900f62513eff63` |
+| VPC CIDR | `172.31.0.0/16` |
+| Region | `ap-south-1` |
 
-```text
-CloudFront
-    |
-    v
-Private EC2
-```
+Verify the VPC ID against the target AWS account before any operation. For another environment, supply that environment's VPC ID and CIDR.
 
-This is inbound application traffic from CloudFront to the private application.
+### 4.2 Existing public subnet
 
-## NAT Gateway
+The NAT Gateway is placed in an existing public subnet. The original POC notes list:
 
-Used for:
+| Property | Current POC reference |
+|---|---|
+| Subnet ID | `subnet-0d6445bd9f644383b` |
+| CIDR | `172.31.0.0/20` |
+| Availability Zone | `ap-south-1b` |
 
-```text
-Private EC2
-    |
-    v
-NAT Gateway
-    |
-    v
-Internet / AWS Services
-```
+Confirm that the subnet has a route to an Internet Gateway and that the selected Availability Zone matches the intended design.
 
-This is outbound traffic from the private application.
+### 4.3 Private subnet and route table
 
-Therefore:
+The network stack creates a private subnet and dedicated route table. The original POC notes list private subnet CIDR `172.31.48.0/20` in `ap-south-1b`. The CIDR must not overlap any existing subnet.
 
-**NAT Gateway is not used to connect CloudFront to the EC2 instance.**
+With NAT enabled, the expected route table is:
 
----
+| Destination | Target |
+|---|---|
+| VPC CIDR (`172.31.0.0/16` in this POC) | `local` |
+| `0.0.0.0/0` | NAT Gateway |
 
-# 13. AWS WAF
+When NAT is disabled, do not assume a default route exists. Instance initialization, Systems Manager, and CloudWatch Agent connectivity must instead be supported by suitable VPC endpoints or another approved network path.
 
-## 13.1 Purpose
+### 4.4 NAT Gateway
 
-AWS WAF protects the CloudFront distribution from common web-based attacks and unwanted traffic.
+The NAT Gateway is placed in the existing public subnet and uses an Elastic IP when enabled by the network stack. It allows private-subnet resources to initiate outbound connections. It does not allow arbitrary Internet-initiated connections to the private EC2 instance. NAT Gateways incur ongoing charges.
 
-The WAF is associated with CloudFront.
+## 5. Compute and Security
 
-It is not a separate network hop.
+### 5.1 EC2 instance
 
-Conceptually:
+The compute stack deploys an Amazon Linux 2023 EC2 instance into the private subnet. The original POC notes list instance ID `i-043ba12e8364ece96`; this is an inventory reference only and must not be hardcoded into reusable templates.
 
-```text
-Internet
-   |
-   v
-CloudFront
-   |
-   +---- AWS WAF protection
-   |
-   v
-VPC Origin
-   |
-   v
-Private EC2
-```
+The compute template is documented as configuring an encrypted gp3 root volume, requiring IMDSv2, enabling EC2 termination protection, creating an IAM role and instance profile, and using user data to install/configure the web server, Systems Manager, and CloudWatch Agent. Confirm the current template values before changing a live stack.
 
----
+### 5.2 Security group
 
-## 13.2 CloudFront WAF Region
+The POC design describes inbound TCP port 80 from the VPC CIDR and from the CloudFront origin-facing managed prefix list. The original notes list prefix-list ID `pl-9aa247f3`; verify it in the target region/account rather than copying it blindly.
 
-CloudFront-scoped WAF resources are created in:
+The original design permits outbound traffic. Review whether broad egress is necessary for the target environment. Do not expose SSH (TCP 22) to the public Internet; use Systems Manager where configured and operational.
 
-```text
-us-east-1
-```
+### 5.3 Systems Manager
 
-This is different from the main application infrastructure region.
+Systems Manager is the intended administrative path and avoids requiring public SSH. Successful use depends on the instance role, SSM Agent, DNS, and network access to required Systems Manager endpoints through NAT or suitable VPC endpoints.
 
-The POC application infrastructure is in:
+## 6. CloudFront and VPC Origin
 
-```text
-ap-south-1
-```
+The CloudFront stack is intended to create a VPC Origin for the private EC2 resource and a distribution that forwards viewer requests to that origin.
 
-The CloudFront WAF is therefore managed separately.
+The documented template behavior includes:
+- Redirecting viewer HTTP requests to HTTPS.
+- Using the default CloudFront certificate unless custom-domain configuration is added separately.
+- Using HTTP on port 80 from CloudFront to the private origin (`origin protocol policy: http-only`).
+- Disabling caching through zero TTL settings.
+- Forwarding query strings and enabling compression.
+- Allowing the HTTP methods configured in the template; review these methods before production because write methods expand the origin's request surface.
 
----
+**TLS boundary:** Viewer-to-CloudFront traffic uses HTTPS after redirection, but CloudFront-to-origin traffic is HTTP in the described template. That origin leg is not encrypted. Evaluate whether origin HTTPS is required.
 
-## 13.3 Managed Rules
+CloudFront VPC Origin creation was previously reported to fail because of an account-verification restriction. Treat this as a blocker until a successful stack event confirms the restriction has been lifted and the origin/distribution deploy. Template validation alone does not prove AWS resource creation will succeed.
 
-The intended WAF configuration uses AWS Managed Rules including:
+## 7. AWS WAF
 
-1. AWSManagedRulesCommonRuleSet
-2. AWSManagedRulesKnownBadInputsRuleSet
-3. AWSManagedRulesLinuxRuleSet
-4. AWSManagedRulesSQLiRuleSet
-5. AWSManagedRulesAmazonIpReputationList
+The WAF stack creates an `AWS::WAFv2::WebACL` with `Scope: CLOUDFRONT`. CloudFront-scoped WAF resources must be created in `us-east-1`, even when the application VPC and EC2 instance are in `ap-south-1`.
 
-These rules provide protection against common malicious requests and known attack patterns.
+The documented managed rule groups are:
+- `AWSManagedRulesCommonRuleSet`
+- `AWSManagedRulesKnownBadInputsRuleSet`
+- `AWSManagedRulesLinuxRuleSet`
+- `AWSManagedRulesSQLiRuleSet`
+- `AWSManagedRulesAmazonIpReputationList`
 
----
+The described configuration uses a default Allow action and managed rules to evaluate and block requests according to the rules. Metrics and sampled requests are described as enabled. Do not assume WAF request logging is configured unless a logging destination is separately set up and verified.
 
-# 14. AWS WAF CloudFormation Stack
+Managed rules can block legitimate requests. Validate them in a non-production environment and consider Count mode during initial evaluation where appropriate.
 
-The WAF configuration is defined in:
+### WAF and CloudFront dependency
 
-```text
-cloudformation/04-waf.yaml
-```
+The WAF can be created independently, but the distribution must be configured with the correct Web ACL ARN for protection to be active. Follow the templates' actual parameter/export mechanism; do not assume the stacks are connected merely because both exist.
 
-The stack creates:
+## 8. CloudFormation Stack Responsibilities and Dependencies
 
-```text
-AWS::WAFv2::WebACL
-```
+The repository's five templates are intended to have these responsibilities:
 
-with:
+| Template | Responsibility | Main dependency |
+|---|---|---|
+| `cloudformation/01-network.yaml` | Private subnet, route table and association, optional NAT Gateway/EIP and route | Existing VPC and public subnet parameters |
+| `cloudformation/02-compute.yaml` | EC2, security group, IAM role/profile, instance configuration, CloudWatch alarms | Network outputs, including private subnet |
+| `cloudformation/03-cloudfront.yaml` | CloudFront VPC Origin and distribution; optional Web ACL association | Compute outputs and, if associated at deployment, WAF ARN |
+| `cloudformation/04-waf.yaml` | CloudFront-scoped WAF Web ACL and managed rules | Deploy in `us-east-1`; distribution association needs its ARN |
+| `cloudformation/05-backup.yaml` | Backup vault, plan, role, selection and retention | Compute instance/resource ARN |
 
-```text
-Scope: CLOUDFRONT
-```
+Verify these paths against the actual repository tree before relying on them.
 
-The stack exports the Web ACL ARN.
+Recommended operational sequence:
+1. Deploy or verify the network stack in the application region.
+2. Deploy or verify the compute stack in the application region.
+3. Create the WAF stack in `us-east-1` when its ARN is needed for CloudFront configuration.
+4. Deploy the CloudFront stack with the correct compute-origin information and Web ACL ARN if supported by its template.
+5. Deploy the backup stack in the region containing the protected EC2 resource.
+6. Validate origin response, WAF association, monitoring, backup jobs, and restore.
 
-The CloudFront stack can then use the ARN when associating the WAF with the distribution.
+The exact order of WAF and CloudFront depends on how the templates pass the Web ACL ARN. Review template parameters and exports before deployment.
 
----
+## 9. Monitoring and Initialization
 
-# 15. CloudFront Account Verification
+The compute template's described user data installs required packages, configures the web server, enables Systems Manager, and configures the CloudWatch Agent. The agent is intended to publish memory and root filesystem utilization metrics. CloudWatch alarms are described for CPU, instance status checks, memory, and disk.
 
-During CloudFormation deployment, CloudFront resource creation returned the following AWS error:
+Initialization depends on package repositories and AWS service endpoints being reachable. If NAT is disabled, provide the required VPC endpoints or another approved path. Confirm that agent metrics use the same metric names and dimensions expected by alarms; an alarm's existence does not prove its metric is being published.
 
-```text
-Your account must be verified before you can add new CloudFront resources.
-```
+## 10. AWS Backup
 
-The failure occurred while creating:
+The backup template is described as creating a backup vault, IAM role, plan, and selection for the EC2 resource, with a 30-day retention period.
 
-```text
-AWS::CloudFront::VpcOrigin
-```
-
-The CloudFormation template itself passed validation.
-
-Therefore the issue was not identified as a YAML syntax problem.
-
-The issue is an AWS account-level CloudFront resource creation restriction.
-
-An AWS Support case was raised requesting account verification and CloudFront resource creation access.
-
-Until the restriction is removed, the CloudFront CloudFormation stack cannot be fully deployed.
-
----
-
-# 16. CloudFormation Architecture
-
-The infrastructure is divided into multiple CloudFormation stacks.
-
-```text
-01-network
-     |
-     v
-02-compute
-     |
-     v
-03-cloudfront
-     |
-     v
-04-waf
-
-02-compute
-     |
-     v
-05-backup
-```
-
-The dependency order is intentional.
-
----
-
-# 17. CloudFormation Stack 01 – Network
-
-File:
-
-```text
-cloudformation/01-network.yaml
-```
-
-Purpose:
-
-- Create private subnet
-- Create private route table
-- Associate private subnet
-- Optionally create NAT Gateway
-- Create Elastic IP when NAT is enabled
-- Create default NAT route
-
-The VPC and public subnet are supplied as parameters.
-
----
-
-# 18. Network Stack Parameters
-
-Important parameters include:
-
-```text
-ExistingVpcId
-ExistingPublicSubnetId
-AvailabilityZone
-PrivateSubnetCidr
-EnableNatGateway
-ProjectName
-Environment
-Owner
-```
-
-This allows the same template to be used with different VPCs and subnets.
-
----
-
-# 19. Network Stack Outputs
-
-The network stack exports values such as:
-
-```text
-VpcId
-PrivateSubnetId
-PrivateRouteTableId
-NatGatewayId
-```
-
-The compute stack can consume these values using CloudFormation cross-stack references.
-
----
-
-# 20. CloudFormation Stack 02 – Compute
-
-File:
-
-```text
-cloudformation/02-compute.yaml
-```
-
-Purpose:
-
-- Create IAM role
-- Create EC2 instance profile
-- Create EC2 security group
-- Launch Amazon Linux EC2
-- Configure SSM
-- Configure CloudWatch Agent
-- Create CloudWatch alarms
-
----
-
-# 21. Compute Stack Dependencies
-
-The compute stack depends on the network stack.
-
-The private subnet is obtained from the network stack.
-
-Conceptually:
-
-```text
-Network Stack
-     |
-     | PrivateSubnetId
-     v
-Compute Stack
-     |
-     v
-Private EC2
-```
-
----
-
-# 22. EC2 IAM Role
-
-The EC2 instance uses an IAM role.
-
-The role includes:
-
-```text
-AmazonSSMManagedInstanceCore
-CloudWatchAgentServerPolicy
-```
-
-These permissions support:
-
-- Systems Manager Session Manager
-- CloudWatch Agent
-- CloudWatch metric publishing
-
----
-
-# 23. Systems Manager
-
-AWS Systems Manager is the preferred administrative access method.
-
-The architecture does not depend on SSH access from the public Internet.
-
-The intended administrative flow is:
-
-```text
-Administrator
-     |
-     v
-AWS Systems Manager
-     |
-     v
-Private EC2
-```
-
-This avoids exposing SSH port 22 publicly.
-
----
-
-# 24. CloudWatch Monitoring
-
-The EC2 instance is configured to send monitoring information to CloudWatch.
-
-The CloudWatch Agent is configured to collect additional metrics such as:
-
-- Memory utilization
-- Root filesystem disk utilization
-
-Metrics are collected periodically.
-
----
-
-# 25. EC2 User Data
-
-The EC2 User Data performs initial configuration.
-
-The intended actions include:
-
-```text
-Install required packages
-Install CloudWatch Agent
-Configure timezone
-Enable SSM
-Enable CloudWatch Agent
-Start required services
-Configure monitoring
-```
-
-The configuration depends on outbound network access through NAT or suitable VPC endpoints.
-
----
-
-# 26. CloudFormation Stack 03 – CloudFront
-
-File:
-
-```text
-cloudformation/03-cloudfront.yaml
-```
-
-Purpose:
-
-- Create CloudFront VPC Origin
-- Create CloudFront distribution
-- Connect CloudFront to private EC2
-- Configure viewer protocol policy
-- Configure origin protocol
-- Configure caching behavior
-- Optionally associate WAF
-
----
-
-# 27. CloudFront Stack Dependency
-
-The CloudFront stack depends on the compute stack.
-
-Conceptually:
-
-```text
-Compute Stack
-     |
-     | EC2 ARN / private origin information
-     v
-CloudFront Stack
-     |
-     +---- VPC Origin
-     |
-     +---- CloudFront Distribution
-```
-
----
-
-# 28. CloudFormation Stack 04 – WAF
-
-File:
-
-```text
-cloudformation/04-waf.yaml
-```
-
-Purpose:
-
-- Create CloudFront-scoped WAF
-- Enable AWS managed rule groups
-- Export Web ACL ARN
-
-The stack must be deployed in:
-
-```text
-us-east-1
-```
-
-because the WAF scope is:
-
-```text
-CLOUDFRONT
-```
-
----
-
-# 29. CloudFormation Stack 05 – Backup
-
-File:
-
-```text
-cloudformation/05-backup.yaml
-```
-
-Purpose:
-
-- Create AWS Backup vault
-- Create backup IAM role
-- Create backup plan
-- Configure weekly backup
-- Configure retention
-- Select the EC2 instance
-
----
-
-# 30. AWS Backup Schedule
-
-The intended schedule is:
-
-```text
-Every Monday at 00:00 JST
-```
-
-The CloudFormation cron expression is:
+The schedule recorded in the POC notes is:
 
 ```text
 cron(0 15 ? * SUN *)
 ```
 
-This is:
+AWS Backup evaluates this schedule in UTC: 15:00 UTC Sunday, 00:00 JST Monday, and 20:30 IST Sunday. Confirm the current template's schedule before relying on these times.
 
-```text
-15:00 UTC Sunday
-```
+The vault is documented with `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`. A retained vault and recovery points may remain after stack deletion and continue to incur charges. A successful backup job does not prove the application can be recovered; perform a restore test and record the outcome.
 
-which corresponds to:
+The described selection covers the configured EC2 resource only. Other data stores or application dependencies need their own backup and recovery requirements.
 
-```text
-00:00 JST Monday
-```
+## 11. Current POC Status
 
----
+The following is a historical status snapshot from the original notes, not a live AWS check. Update it after checking current stack events and resources.
 
-# 31. Backup Retention
-
-The intended retention period is:
-
-```text
-30 days
-```
-
-The backup vault is configured with retention protection at the CloudFormation resource level using:
-
-```text
-DeletionPolicy: Retain
-UpdateReplacePolicy: Retain
-```
-
-This reduces the risk of accidentally deleting the vault when the CloudFormation stack is removed.
-
----
-
-# 32. Backup Scope
-
-The POC backup configuration protects the EC2 instance selected by the backup selection.
-
-The backup design should not automatically be interpreted as complete application-level data protection.
-
-If the application uses additional resources such as:
-
-- RDS
-- EFS
-- S3
-- DynamoDB
-- Application-specific storage
-
-those resources require their own backup and recovery requirements.
-
----
-
-# 33. Backup vs High Availability
-
-AWS Backup is not the same as high availability.
-
-Backup provides recovery capability.
-
-High availability provides continued service availability.
-
-For example:
-
-```text
-Backup:
-EC2
- |
- v
-Recovery Point
- |
- v
-Restore
-```
-
-High availability would involve additional architecture such as:
-
-```text
-Load Balancer
-     |
-     +---- EC2 AZ-A
-     |
-     +---- EC2 AZ-B
-```
-
-The current POC focuses on backup and recovery rather than full high availability.
-
----
-
-# 34. Security Architecture
-
-The security model is based on minimizing public exposure.
-
-The intended architecture is:
-
-```text
-Internet
-   |
-   v
-CloudFront
-   |
-   v
-WAF
-   |
-   v
-VPC Origin
-   |
-   v
-Private EC2
-```
-
-The EC2 instance does not have a public IP.
-
----
-
-# 35. Public vs Private Resources
-
-## Public
-
-The public subnet is used for infrastructure that requires Internet Gateway connectivity.
-
-In this POC:
-
-```text
-Public Subnet
-    |
-    +---- NAT Gateway
-```
-
-## Private
-
-The private subnet contains the application EC2 instance.
-
-```text
-Private Subnet
-    |
-    +---- EC2
-```
-
-The private subnet does not assign public IP addresses to the EC2 instance.
-
----
-
-# 36. Network Security Summary
-
-| Component | Exposure |
+| Component | Status reported in original notes |
 |---|---|
-| EC2 | Private |
-| EC2 Public IP | None |
-| SSH | Not required |
-| HTTP | Restricted by Security Group |
-| CloudFront | Public entry point |
-| WAF | CloudFront protection |
-| NAT Gateway | Outbound connectivity |
-| Internet Gateway | Public subnet connectivity |
+| Existing VPC | Existing |
+| Network stack / private subnet / route table / NAT | Reported deployed |
+| Compute stack / private EC2 / security group | Reported deployed |
+| Systems Manager / CloudWatch | Reported configured; operational validation should be confirmed |
+| CloudFront template | Reported validated |
+| CloudFront deployment | Reported blocked by AWS account verification |
+| WAF template | Reported validated; deployment pending |
+| Backup template | Reported validated; deployment pending |
 
----
+A template passing `validate-template` checks structure; it does not prove resources can be created or that the resulting architecture works end to end. Update each status based on current evidence.
 
-# 37. Resource Naming
+## 12. Validation Plan
 
-The CloudFormation templates use a naming pattern based on:
+Validate each layer separately and record evidence.
 
-```text
-ProjectName
-Environment
-Resource
-```
+### Network
+- Confirm VPC, subnet CIDRs, Availability Zones, route table association, and route targets.
+- Confirm NAT Gateway state and outbound connectivity when NAT is enabled.
+- Confirm that disabling NAT does not leave initialization or service traffic without a route.
 
-Example:
+### Compute
+- Confirm EC2 is running in the intended private subnet and has no public IP.
+- Confirm security group rules match intended sources and ports.
+- Confirm Systems Manager access works without public SSH.
+- Confirm CloudWatch Agent metrics and alarms receive the expected names and dimensions.
 
-```text
-IFIS-POC-network
-IFIS-POC-compute
-IFIS-POC-cloudfront
-```
+### CloudFront and WAF
+- Confirm VPC Origin and distribution creation completed successfully.
+- Confirm viewer HTTP redirects to HTTPS and the application responds through the distribution.
+- Confirm origin protocol matches the documented TLS boundary.
+- Confirm the Web ACL is associated with the distribution and managed rules produce expected metrics.
+- Test benign and intentionally blocked requests in a controlled environment.
 
-This makes resources easier to identify.
+### Backup
+- Confirm backup plan, selection, schedule, retention, and vault.
+- Confirm a backup job completes and a recovery point is created.
+- Perform a restore test in an appropriate test environment and document the outcome.
 
----
+## 13. Failure Testing
 
-# 38. Tagging
+- **NAT Gateway or route issue:** Private-instance outbound connectivity may fail; CloudFront-to-EC2 traffic does not use NAT. Restore any modified route after testing.
+- **EC2 failure:** Requests may fail if there is no alternate healthy origin or instance.
+- **CloudFront/VPC Origin failure:** The public entry point or origin path may be unavailable even if EC2 remains running.
+- **WAF misconfiguration:** Legitimate requests may be blocked; monitor metrics and maintain a rollback plan.
+- **Backup restore failure:** A recovery point may not meet recovery objectives; investigate the restore workflow and data dependencies.
 
-Resources use tags such as:
+Do not describe a NAT Gateway as something that can simply be stopped like an EC2 instance. If testing changes routes or removes resources, document restoration steps.
 
-```text
-Project
-Environment
-Owner
-```
+## 14. Security, Availability, and Cost
 
-Example:
+This POC is not a multi-AZ high-availability design. Production review may consider multiple Availability Zones, redundant application instances, load balancing, NAT design per Availability Zone, VPC endpoints, centralized logging, CloudTrail, GuardDuty, Security Hub, AWS Config, KMS key strategy, least-privilege security groups, and automated disaster-recovery tests.
 
-```text
-Project     = IFIS
-Environment = POC
-Owner       = Sohan
-```
+Potential costs include EC2, EBS, NAT Gateway, Elastic IP, data transfer, CloudFront, AWS WAF, CloudWatch, and AWS Backup recovery points. Confirm current resources and delete only those safe to remove after validation. Do not delete the existing/shared VPC as part of POC cleanup.
 
-Tags should be adjusted for future client environments.
+## 15. Cleanup Considerations
 
----
+Use CloudFormation to remove resources where practical, respecting stack dependencies. Before deleting:
+- Remove or update CloudFront resources that depend on the origin or Web ACL.
+- Check whether backup vaults or recovery points are retained and must be preserved.
+- Check whether EC2 termination protection is enabled; it may need to be disabled before stack deletion.
+- Verify each resource ID and region before a destructive command.
+- Preserve shared VPC and public subnet resources unless their owner explicitly approves deletion.
 
-# 39. Repository Structure
-
-The repository is organized as follows:
-
-```text
-sohan_IFIS_project/
-|
-+-- cloudformation/
-|   +-- 01-network.yaml
-|   +-- 02-compute.yaml
-|   +-- 03-cloudfront.yaml
-|   +-- 04-waf.yaml
-|   +-- 05-backup.yaml
-|
-+-- docs/
-|   +-- architecture.md
-|   +-- deployment-guide.md
-|   +-- validation-checklist.md
-|   +-- troubleshooting.md
-|
-+-- config/
-|
-+-- scripts/
-|
-+-- diagrams/
-|
-+-- .gitignore
-|
-+-- README.md
-```
-
----
-
-# 40. CloudFormation Deployment Order
-
-The recommended deployment order is:
-
-```text
-1. Network
-      |
-      v
-2. Compute
-      |
-      +----------------+
-      |                |
-      v                v
-3. CloudFront       5. Backup
-      |
-      v
-4. WAF
-```
-
-Operationally, WAF can be prepared independently in `us-east-1`, but CloudFront must receive the Web ACL ARN when the distribution is configured.
-
----
-
-# 41. Current POC Deployment Status
-
-| Component | Status |
-|---|---|
-| VPC | Existing |
-| Network Stack | Deployed |
-| Private Subnet | Created |
-| Private Route Table | Created |
-| NAT Gateway | Created |
-| Compute Stack | Deployed |
-| Private EC2 | Deployed |
-| Security Group | Configured |
-| SSM | Configured |
-| CloudWatch | Configured |
-| CloudFront Template | Validated |
-| CloudFront Deployment | Blocked by AWS account verification |
-| WAF Template | Validated |
-| WAF Deployment | Pending |
-| Backup Template | Validated |
-| Backup Deployment | Pending |
-
----
-
-# 42. Important Current AWS IDs
-
-The following IDs represent the current POC environment only.
-
-They must not be hardcoded into reusable templates.
-
-```text
-VPC:
-vpc-06900f62513eff63
-
-VPC CIDR:
-172.31.0.0/16
-
-Public Subnet:
-subnet-0d6445bd9f644383b
-
-Private Subnet:
-subnet-08183fb86ccc151e1
-
-Private Subnet CIDR:
-172.31.48.0/20
-
-NAT Gateway:
-nat-0702c9152a11907d3
-
-EC2:
-i-043ba12e8364ece96
-
-CloudFront Managed Prefix List:
-pl-9aa247f3
-```
-
-These values are documented for POC troubleshooting only.
-
----
-
-# 43. Reusability Design
-
-The CloudFormation templates are designed to avoid hardcoding environment-specific resources wherever practical.
-
-For example, the network template accepts:
-
-```text
-ExistingVpcId
-ExistingPublicSubnetId
-PrivateSubnetCidr
-AvailabilityZone
-```
-
-The compute stack receives network information from the network stack.
-
-The backup stack receives the EC2 resource ARN from the compute stack.
-
-This creates a reusable dependency chain.
-
----
-
-# 44. Cross-Stack References
-
-CloudFormation exports and imports are used to connect stacks.
-
-Conceptually:
-
-```text
-Network Stack
-     |
-     | Export
-     v
-PrivateSubnetId
-     |
-     | Import
-     v
-Compute Stack
-```
-
-and:
-
-```text
-Compute Stack
-     |
-     | Export
-     v
-EC2InstanceArn
-     |
-     | Import
-     v
-Backup Stack
-```
-
-This avoids hardcoding resource IDs.
-
----
-
-# 45. Multi-Account Reuse
-
-For a future AWS account, the same CloudFormation templates can be reused.
-
-Environment-specific values can be supplied during deployment.
-
-Example:
-
-```text
-Account A
-    |
-    +-- VPC A
-    +-- Private Subnet A
-    +-- EC2 A
-
-Account B
-    |
-    +-- VPC B
-    +-- Private Subnet B
-    +-- EC2 B
-```
-
-The templates remain the same while parameter values change.
-
----
-
-# 46. Multi-Region Reuse
-
-The application infrastructure can be deployed into another AWS region by supplying region-specific parameters and deploying the stacks in that region.
-
-However, CloudFront and CloudFront-scoped WAF have special regional behavior.
-
-The WAF CloudFront scope must remain associated with the CloudFront global service architecture.
-
-Region-specific resources such as:
-
-- VPC
-- Subnet
-- NAT Gateway
-- EC2
-- Security Groups
-
-must exist in the target AWS region.
-
----
-
-# 47. Production Improvements
-
-The POC is intentionally simpler than a production architecture.
-
-Possible production improvements include:
-
-- Multiple Availability Zones
-- Multiple private subnets
-- NAT Gateway per Availability Zone
-- Application Load Balancer
-- Multiple EC2 instances
-- Auto Scaling
-- Route 53 health checks
-- Stronger security group restrictions
-- VPC endpoints
-- Centralized logging
-- GuardDuty
-- Security Hub
-- AWS Config
-- CloudTrail
-- KMS key management
-- More detailed CloudWatch monitoring
-- Automated disaster recovery testing
-
-These are design considerations and are not automatically part of the current POC.
-
----
-
-# 48. POC vs Production
-
-The current POC is intended to prove the following architecture:
-
-```text
-CloudFront
-    |
-    v
-VPC Origin
-    |
-    v
-Private EC2
-```
-
-with:
-
-```text
-Private EC2
-    |
-    v
-NAT Gateway
-    |
-    v
-Outbound Connectivity
-```
-
-and:
-
-```text
-CloudFront
-    |
-    v
-AWS WAF
-```
-
-plus:
-
-```text
-EC2
- |
- +---- CloudWatch
- |
- +---- SSM
- |
- +---- AWS Backup
-```
-
-Production architecture should be reviewed separately before implementation.
-
----
-
-# 49. Validation Strategy
-
-Validation should be performed layer by layer.
-
-## Layer 1 – Network
-
-Validate:
-
-- VPC
-- Private subnet
-- Route table
-- NAT Gateway
-- Default route
-- Internet connectivity
-
-## Layer 2 – Compute
-
-Validate:
-
-- EC2 running
-- Private IP
-- No public IP
-- Security Group
-- SSM
-- CloudWatch Agent
-
-## Layer 3 – CloudFront
-
-Validate:
-
-- VPC Origin
-- Distribution
-- Viewer HTTPS
-- Origin connectivity
-- Application response
-
-## Layer 4 – WAF
-
-Validate:
-
-- Web ACL
-- Managed rules
-- CloudFront association
-- WAF metrics
-
-## Layer 5 – Backup
-
-Validate:
-
-- Backup vault
-- Backup plan
-- Backup selection
-- Recovery point
-- Restore operation
-
----
-
-# 50. Failure Testing
-
-The POC should eventually test failure scenarios.
-
-Examples include:
-
-## NAT Gateway Failure
-
-Expected impact:
-
-```text
-EC2 -> Internet
-```
-
-may fail.
-
-CloudFront -> EC2 does not use NAT.
-
----
-
-## EC2 Failure
-
-Expected impact:
-
-```text
-CloudFront -> EC2
-```
-
-fails if there is no alternate origin.
-
-This demonstrates why a production architecture may require multiple application instances.
-
----
-
-## CloudFront Failure
-
-The public application entry point becomes unavailable.
-
-The private EC2 instance may still be running.
-
----
-
-## WAF Configuration Issue
-
-Incorrect WAF rules can block legitimate traffic.
-
-WAF monitoring and testing should therefore be performed carefully.
-
----
-
-## Backup Restore Test
-
-A recovery point should be restored to a test environment to verify that the backup is actually usable.
-
-A successful backup job alone does not prove that application recovery is successful.
-
----
-
-# 51. Operational Access
-
-The preferred operational access method is:
-
-```text
-AWS Console / AWS CLI
-        |
-        v
-AWS Systems Manager
-        |
-        v
-EC2
-```
-
-The architecture does not require exposing SSH to the Internet.
-
----
-
-# 52. Cost Considerations
-
-The following POC resources can generate ongoing AWS charges:
-
-- NAT Gateway
-- Elastic IP associated with NAT
-- EC2
-- EBS volume
-- CloudWatch
-- CloudFront
-- AWS WAF
-- AWS Backup
-- Data transfer
-
-For a temporary POC, unused resources should be deleted after validation.
-
-CloudFormation templates and Git repository contents remain available even after the AWS resources are deleted.
-
----
-
-# 53. Resource Cleanup
-
-CloudFormation should be used to remove resources where possible.
-
-Recommended cleanup order:
-
-```text
-CloudFront
-    |
-    v
-Backup
-    |
-    v
-Compute
-    |
-    v
-Network
-```
-
-Before deleting resources, verify whether any retained backup vaults or other resources need to remain.
-
-The AWS Backup vault intentionally uses retention settings to reduce accidental deletion.
-
----
-
-# 54. Important Cleanup Consideration
-
-EC2 termination protection can prevent CloudFormation from deleting the instance.
-
-If termination protection is enabled, it may need to be disabled before deleting the compute stack.
-
-Example:
+For an EC2 instance with termination protection enabled, disable it only after verifying the instance ID:
 
 ```bash
 aws ec2 modify-instance-attribute \
@@ -1613,405 +265,39 @@ aws ec2 modify-instance-attribute \
   --region ap-south-1
 ```
 
-Always verify the instance ID before running this command.
+This changes the instance setting; it does not delete the instance.
 
----
+## 16. Reusability and Configuration
 
-# 55. CloudFormation Validation
+Templates should accept environment-specific values through parameters or configuration files rather than hardcoding live resource IDs. Typical network parameters include existing VPC ID, public subnet ID, Availability Zone, private subnet CIDR, and whether NAT should be enabled.
 
-Before deploying a template, validate it.
+For each new account or region:
+- Verify the target VPC and subnet design.
+- Check CIDR overlap and route requirements.
+- Confirm required permissions and CloudFormation capabilities.
+- Deploy regional resources in the correct region.
+- Create CloudFront-scoped WAF resources in `us-east-1`.
+- Verify exports, imports, and Web ACL ARN handoffs.
+- Review costs, tags, and security controls.
 
-Example:
+## 17. Repository Documentation
 
-```bash
-aws cloudformation validate-template \
-  --template-body file://cloudformation/01-network.yaml \
-  --region ap-south-1
-```
+Keep these links aligned with the actual repository files:
 
-Repeat for the other templates.
+- [README](../README.md)
+- [CloudFormation Deployment Guide](cloudformation-deployment-guide.md)
+- [Manual Deployment Guide](manual-deployment-guide.md)
+- [Troubleshooting](troubleshooting.md)
+- [Validation Checklist](validation-checklist.md)
 
----
+The five templates are expected under `cloudformation/`: `01-network.yaml`, `02-compute.yaml`, `03-cloudfront.yaml`, `04-waf.yaml`, and `05-backup.yaml`. Verify the repository tree and update this section if files are located elsewhere.
 
-# 56. CloudFormation Change Management
+## 18. Document Maintenance
 
-Before production deployment, use CloudFormation change sets where appropriate.
+Update this document when the network layout, templates, security controls, CloudFront configuration, WAF rules, backup schedule, monitoring, or deployment process changes. Keep POC-specific IDs and historical deployment status clearly labeled. Never commit credentials, access keys, private keys, passwords, tokens, or configuration files containing secrets.
 
-Recommended workflow:
+## 19. Architecture Summary
 
-```text
-Edit Template
-     |
-     v
-Validate Template
-     |
-     v
-Create Change Set
-     |
-     v
-Review Changes
-     |
-     v
-Execute Change Set
-     |
-     v
-Validate Resources
-```
+The intended design keeps the application EC2 instance private, exposes the application through CloudFront and a CloudFront VPC Origin, applies AWS WAF at the CloudFront distribution, uses NAT for private-subnet outbound connectivity when enabled, uses Systems Manager for administration, CloudWatch for monitoring, and AWS Backup for scheduled recovery points.
 
-Templates should be maintained in Git.
-
----
-
-# 57. Git Version Control
-
-The infrastructure code and documentation are maintained in Git.
-
-The repository provides:
-
-- Version history
-- Change tracking
-- Documentation history
-- Rollback reference
-- Reusable templates
-- Team collaboration
-
-The repository should not contain:
-
-- Passwords
-- Access keys
-- Private keys
-- Secrets
-- Sensitive credentials
-
----
-
-# 58. Sensitive Information
-
-The following should never be committed to Git:
-
-```text
-AWS Access Keys
-AWS Secret Keys
-Private SSH Keys
-Passwords
-API Tokens
-Application Secrets
-.env files containing credentials
-```
-
-The `.gitignore` file is configured to exclude common sensitive files.
-
----
-
-# 59. Recommended Future Configuration Management
-
-For future client environments, environment-specific configuration can be stored separately from the templates.
-
-For example:
-
-```text
-config/
-|
-+-- poc-ap-south-1.json
-+-- client-a-ap-south-1.json
-+-- client-b-ap-northeast-1.json
-```
-
-The same CloudFormation templates can then be reused with different configuration values.
-
----
-
-# 60. Architecture Principles
-
-The POC follows these major principles:
-
-### Private application
-
-The application EC2 instance is not directly exposed to the Internet.
-
-### Managed public entry point
-
-CloudFront provides the public application entry point.
-
-### Web protection
-
-AWS WAF protects the CloudFront layer.
-
-### Controlled outbound connectivity
-
-NAT Gateway provides outbound connectivity for private resources.
-
-### Managed administration
-
-Systems Manager provides administrative access without requiring public SSH.
-
-### Monitoring
-
-CloudWatch provides infrastructure monitoring.
-
-### Backup
-
-AWS Backup provides scheduled recovery points.
-
-### Infrastructure as Code
-
-CloudFormation provides repeatable infrastructure deployment.
-
-### Version control
-
-Git provides infrastructure and documentation version history.
-
----
-
-# 61. Final Architecture Summary
-
-The complete logical architecture is:
-
-```text
-                         INTERNET
-                            |
-                            v
-                       ROUTE 53
-                            |
-                            v
-                      CLOUDFRONT
-                            |
-                       AWS WAF
-                            |
-                            v
-                    CLOUDFRONT VPC
-                       ORIGIN
-                            |
-                            v
-                  +------------------+
-                  |      VPC         |
-                  |                  |
-                  | Private Subnet   |
-                  |                  |
-                  |   +----------+   |
-                  |   |   EC2    |   |
-                  |   +----------+   |
-                  |        |         |
-                  |        |         |
-                  |        v         |
-                  |   NAT Gateway    |
-                  |        |         |
-                  +--------|---------+
-                           |
-                           v
-                        INTERNET
-
-
-Supporting Services:
-
-EC2 ---------> Systems Manager
- |
- +-----------> CloudWatch
- |
- +-----------> AWS Backup
-```
-
----
-
-# 62. Target Deployment Model
-
-The reusable deployment model is:
-
-```text
-Existing VPC
-     |
-     v
-Network Stack
-     |
-     v
-Compute Stack
-     |
-     +--------------------+
-     |                    |
-     v                    v
-CloudFront Stack       Backup Stack
-     |
-     v
-WAF Association
-```
-
-The templates are intended to be reusable across environments by changing parameters rather than modifying the core infrastructure logic.
-
----
-
-# 63. Current Repository Templates
-
-The current CloudFormation templates are:
-
-```text
-cloudformation/01-network.yaml
-cloudformation/02-compute.yaml
-cloudformation/03-cloudfront.yaml
-cloudformation/04-waf.yaml
-cloudformation/05-backup.yaml
-```
-
-Each template has a focused responsibility.
-
-This separation makes the infrastructure easier to understand, deploy, validate, troubleshoot, and reuse.
-
----
-
-# 64. Current POC Conclusion
-
-The POC has successfully demonstrated the foundational AWS infrastructure required for the IFIS architecture.
-
-The following areas have been implemented or prepared:
-
-- Existing VPC integration
-- Private subnet
-- Private route table
-- NAT Gateway
-- Private EC2
-- Security Group
-- IAM role
-- Systems Manager
-- CloudWatch monitoring
-- CloudFormation network stack
-- CloudFormation compute stack
-- CloudFront VPC Origin template
-- CloudFront distribution template
-- CloudFront WAF template
-- AWS Backup template
-- Architecture documentation
-
-The remaining CloudFront validation depends on AWS account verification.
-
-Once CloudFront resource creation is enabled, the remaining validation should continue with:
-
-```text
-CloudFront
-    |
-    v
-VPC Origin
-    |
-    v
-Private EC2
-    |
-    v
-Application Test
-```
-
-followed by:
-
-```text
-AWS WAF
-    |
-    v
-CloudFront
-```
-
-and:
-
-```text
-AWS Backup
-    |
-    v
-Backup
-    |
-    v
-Restore Test
-```
-
----
-
-# 65. Related Documentation
-
-Additional project documentation should include:
-
-```text
-docs/deployment-guide.md
-docs/validation-checklist.md
-docs/troubleshooting.md
-```
-
-These documents should explain:
-
-- How to deploy the stacks
-- Required parameters
-- Validation commands
-- AWS Console validation
-- Troubleshooting
-- Failure scenarios
-- Cleanup
-- Restore procedures
-- Future environment replication
-
----
-
-# 66. Document Maintenance
-
-This document should be updated whenever there is a significant architecture change.
-
-Examples:
-
-- New AWS service
-- New subnet
-- New CloudFormation stack
-- New security control
-- CloudFront architecture change
-- WAF rule change
-- Backup policy change
-- Monitoring change
-- Production architecture change
-
-Environment-specific IDs should be updated only where required for POC operational reference.
-
-Reusable CloudFormation templates should continue to avoid hardcoded environment-specific resource IDs wherever possible.
-
----
-
-# 67. Document Ownership
-
-| Item | Value |
-|---|---|
-| Project | IFIS |
-| Environment | POC |
-| Document | AWS Architecture |
-| Infrastructure | AWS CloudFormation |
-| Repository | sohan_IFIS_project |
-| Primary Region | ap-south-1 |
-| CloudFront WAF Region | us-east-1 |
-
----
-
-# 68. End State
-
-The desired end state of the POC is:
-
-```text
-User
- |
- v
-Route 53
- |
- v
-CloudFront
- |
- v
-AWS WAF
- |
- v
-CloudFront VPC Origin
- |
- v
-Private EC2
- |
- +---- SSM
- |
- +---- CloudWatch
- |
- +---- AWS Backup
- |
- +---- NAT Gateway
-          |
-          v
-       Internet
-```
-
-This architecture provides a private application server with CloudFront as the public entry point, WAF protection at the CloudFront layer, controlled outbound connectivity through NAT Gateway, centralized AWS management through Systems Manager, monitoring through CloudWatch, and scheduled backup through AWS Backup.
+Consider the design fully validated only after any CloudFront account restriction is resolved, the end-to-end application path is tested, WAF association is confirmed, monitoring is verified, and a backup restore test succeeds.
