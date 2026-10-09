@@ -26,10 +26,7 @@ Resources:
     Properties:
       Name: !Sub '${ProjectName}-${Environment}-cloudfront-waf'
 
-      Description: !Sub >
-        AWS WAF Web ACL for ${ProjectName} ${Environment}
-        CloudFront distribution
-
+      Description: IFIS POC CloudFront WAF 
       Scope: CLOUDFRONT
 
       DefaultAction:
