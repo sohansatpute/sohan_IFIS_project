@@ -1,5 +1,7 @@
 # IFIS POC – Manual AWS Deployment Guide
 
+> **Scope and safety:** This is a manual, console-based procedure for the IFIS proof of concept (POC), not an automated deployment guide. Values and resource IDs shown below describe the existing POC and are examples only. Before using this guide in another account, region, or environment, identify and substitute the target environment's VPC, subnet, CIDR, Availability Zone, prefix list, naming, and security requirements. Do not copy POC resource IDs blindly. Review expected AWS charges before creating NAT Gateway, EC2, CloudFront, WAF, EBS, or backup resources.
+
 ## 1. Purpose
 
 This document provides the complete manual deployment procedure for the IFIS POC AWS architecture using the AWS Management Console.
@@ -21,13 +23,12 @@ This is a POC guide. Production deployments must be reviewed for high availabili
 
 The target architecture is:
 
+The default CloudFront `*.cloudfront.net` URL works without Route 53 or a custom domain. Route 53 is optional when a custom domain is needed and the domain's DNS is hosted there.
+
     Internet
         |
         v
-    Route 53
-        |
-        v
-    CloudFront
+    CloudFront (default URL or optional custom hostname)
         |
         v
     AWS WAF
@@ -111,9 +112,7 @@ The current POC uses the existing VPC.
 | CloudFront managed prefix list | pl-9aa247f3 |
 | CloudFront prefix list name | com.amazonaws.global.cloudfront.origin-facing |
 
-These IDs belong to the current POC AWS account.
-
-For another account, region, or environment, identify the equivalent resources instead of copying these IDs.
+These values identify the current POC environment; they are not universal defaults. Confirm each value in the target AWS account and selected region before proceeding. For another account, region, or environment, identify the equivalent resources instead of copying these IDs. The private subnet ID is shown for reference only; it will be newly assigned when you create a new private subnet.
 
 ---
 
@@ -133,6 +132,10 @@ Before starting the manual deployment, confirm that you have:
 - Permission to create AWS Backup resources.
 - Permission to use Systems Manager.
 - Permission to use CloudWatch.
+
+---
+
+Before creating billable resources, confirm the cost owner and teardown plan. A public NAT Gateway incurs hourly and data-processing charges; EC2, EBS, CloudFront, WAF, CloudWatch, and AWS Backup can also incur charges. The AWS Console region must be checked for every regional resource. CloudFront-scoped WAF resources must be created in `us-east-1`; the workload resources in this POC use `ap-south-1`.
 
 ---
 
@@ -482,7 +485,7 @@ Advanced details → IAM instance profile
 
 # 17. Step 11 – Identify the CloudFront Managed Prefix List
 
-CloudFront VPC Origin traffic should be allowed through the AWS-managed CloudFront origin-facing prefix list.
+CloudFront VPC Origin traffic should be allowed through the AWS-managed CloudFront origin-facing prefix list. The prefix list ID is region-specific; look up the current ID in the workload region rather than assuming the POC ID is valid elsewhere.
 
 Open:
 
@@ -712,9 +715,7 @@ Termination protection
 
 Important:
 
-Termination protection can prevent CloudFormation or manual deletion workflows from deleting the instance.
-
-Before final POC cleanup, termination protection may need to be disabled.
+Termination protection prevents API termination of the instance and can block termination-based cleanup. The CloudFormation compute template sets `DisableApiTermination: true`; enable the equivalent EC2 setting for the manual POC after launch. Before final cleanup, disable termination protection first.
 
 ---
 
@@ -744,7 +745,7 @@ Paste the following complete User Data:
 
     dnf install -y amazon-cloudwatch-agent jq unzip wget curl
 
-    timedatectl set-timezone Asia/Tokyo
+    timedatectl set-timezone Asia/Kolkata
 
     systemctl enable amazon-ssm-agent
     systemctl start amazon-ssm-agent
@@ -756,7 +757,7 @@ Paste the following complete User Data:
         "run_as_user": "root"
       },
       "metrics": {
-        "namespace": "IFIS/EC2",
+        "namespace": "CWAgent",
         "metrics_collected": {
           "mem": {
             "measurement": [
@@ -785,9 +786,7 @@ Important:
 
 The User Data is executed during the initial instance boot.
 
-The EC2 instance requires outbound connectivity through the NAT Gateway to download packages and communicate with AWS services.
-
-If NAT connectivity is unavailable and no VPC endpoints are configured, SSM and package installation may fail.
+The EC2 instance requires outbound connectivity through the NAT Gateway to download packages and communicate with AWS services, unless suitable VPC endpoints and package sources are configured. If NAT connectivity is unavailable and no alternative path exists, package installation, SSM, and CloudWatch publishing may fail.
 
 ---
 
@@ -950,7 +949,7 @@ Verify timezone:
 
 Expected timezone:
 
-    Asia/Tokyo
+    Asia/Kolkata
 
 Verify the CloudWatch Agent configuration:
 
@@ -958,7 +957,7 @@ Verify the CloudWatch Agent configuration:
 
 The configuration should contain:
 
-- IFIS/EC2 namespace.
+- CWAgent namespace.
 - Memory metric.
 - Root disk metric.
 - 300-second collection interval.
@@ -991,9 +990,7 @@ If it fails, check:
 
 # 31. Step 25 – Install or Verify a Web Server
 
-The CloudFront VPC Origin requires the EC2 instance to provide a reachable HTTP service.
-
-For the POC, install a simple web server if the application is not already installed.
+The CloudFront VPC Origin requires the EC2 instance to provide a reachable HTTP service. The CloudFormation compute template installs and starts Apache (`httpd`) and writes a test page during User Data execution. For a manual launch, the following steps reproduce that basic test service if the application is not already installed.
 
 Example:
 
@@ -1022,7 +1019,7 @@ Expected result:
 
 Important:
 
-The EC2 Security Group must allow TCP port 80 from the required CloudFront origin-facing prefix list.
+The EC2 Security Group must allow TCP port 80 from the required CloudFront origin-facing prefix list. The current compute template also allows HTTP from the configured VPC CIDR; review whether that broad internal access is appropriate for your target environment.
 
 ---
 
@@ -1116,26 +1113,16 @@ Viewer protocol policy:
 
 Redirect HTTP to HTTPS
 
-Allowed HTTP methods:
+For the IFIS POC, use settings consistent with `cloudformation/03-cloudfront.yaml`:
 
-GET, HEAD
-
-For a simple POC, caching can be disabled or minimized according to the application requirements.
-
-For the IFIS POC, use a configuration consistent with the CloudFormation distribution:
-
-Caching:
-Disabled / no-cache behavior
-
-HTTP versions:
-
-HTTP/2
-
-HTTP/3 may be enabled if desired and supported by the account configuration.
-
-IPv6:
-
-Disable if matching the documented POC design.
+- **Allowed HTTP methods:** all seven methods — GET, HEAD, OPTIONS, PUT, POST, PATCH, and DELETE. The template allows these methods even though a simple static test page only needs GET and HEAD. For a real application, restrict methods to the minimum required; do not enable write methods without an application/security review.
+- **Cached methods:** GET and HEAD.
+- **Caching:** disabled by setting minimum, default, and maximum TTLs to `0`.
+- **Query strings:** forwarded to the origin.
+- **Compression:** enabled.
+- **Price class:** `PriceClass_100`, which limits edge locations and may affect latency for some viewers.
+- **HTTP versions:** HTTP/2 and HTTP/3.
+- **IPv6:** disabled in the current template.
 
 Default root object:
 
@@ -1284,9 +1271,7 @@ Review:
 - Sampled requests.
 - CloudWatch metrics.
 
-For the initial POC, the default action is Allow and AWS Managed Rules provide the protection layer.
-
-Do not create aggressive custom blocking rules until application behavior has been tested.
+The Web ACL template uses **Default action: Allow** and the listed AWS Managed Rule groups with their normal blocking behavior (it does not set the rules to Count mode). A request can therefore be blocked by a managed rule even while the default action is Allow. Review sampled requests and metrics, test legitimate application traffic, and consider a staged Count-mode evaluation in a non-production environment before enforcing managed rules on a production application. WAF usage may incur additional charges.
 
 ---
 
@@ -1340,13 +1325,7 @@ Schedule:
 
 Weekly
 
-The documented production-style schedule is:
-
-15:00 UTC Sunday
-
-This corresponds to:
-
-00:00 Monday JST
+The current template default is `cron(0 15 ? * SUN *)`, meaning 15:00 UTC every Sunday. This corresponds to Sunday 20:30 India Standard Time (IST). AWS Backup cron expressions are evaluated in UTC; confirm the required local schedule before changing it. (For reference, 15:00 UTC Sunday is Monday 00:00 in Japan Standard Time.)
 
 Retention:
 
@@ -1395,11 +1374,9 @@ IFIS-POC-backup-plan
 Backup vault:
 IFIS-POC-backup-vault
 
-A scheduled backup should eventually create a recovery point.
+The configured schedule is `cron(0 15 ? * SUN *)`, which means 15:00 UTC every Sunday (20:30 Sunday in India Standard Time). Confirm that this is the intended local time before using it outside the POC. Retention is 30 days in the documented baseline.
 
-For immediate POC validation, perform an on-demand backup if required.
-
-This may create additional AWS charges.
+A scheduled backup should eventually create a recovery point. For immediate POC validation, perform an on-demand backup if required; this may create additional AWS charges.
 
 ---
 
@@ -1413,22 +1390,11 @@ Check:
 
 Metrics
 
-The CloudWatch Agent should publish metrics under:
+The CloudWatch Agent should publish metrics under the `CWAgent` namespace. Expected metrics include `mem_used_percent` and `disk_used_percent`; the root disk resource is `/`. The collection interval is 300 seconds.
 
-IFIS/EC2
+Also review the CloudWatch alarms created by the compute template: high CPU, system status check failure, instance status check failure, high memory usage, and high root-disk usage. Open **CloudWatch → Alarms** and confirm the alarms exist and transition out of `INSUFFICIENT_DATA` after metrics arrive.
 
-Expected metrics include:
-
-- mem_used_percent
-- disk used_percent
-
-Root disk monitoring should be visible for:
-
-/
-
-The collection interval is:
-
-300 seconds
+**Important implementation check:** the current compute template defines memory and disk alarms with an `InstanceId` metric dimension, but its CloudWatch Agent configuration does not explicitly configure that dimension. Confirm that the published `CWAgent` metrics have dimensions matching the alarm definitions. If the dimensions do not match, the memory/disk alarms may remain in `INSUFFICIENT_DATA`; correct and validate the template/agent configuration before relying on those alarms.
 
 CloudWatch Agent logs can be checked on the EC2 instance if metrics do not appear.
 
@@ -1572,9 +1538,9 @@ Restore the NAT route after testing.
 
 ---
 
-# 50. Step 44 – Failure Test – Stop NAT Gateway
+# 50. Step 44 – Failure Test – NAT Gateway Removal (Destructive)
 
-For controlled testing only, stop or remove the NAT Gateway if required.
+For controlled testing only, **delete** the NAT Gateway if you need to test this failure mode. AWS NAT Gateways do not have a stop/start action. Deleting and recreating one can change its ID and incur charges; avoid this destructive test unless you have approval and a recovery plan. A safer first test is to temporarily remove the private route to the NAT Gateway, as described in the previous section.
 
 Expected result:
 
@@ -1592,7 +1558,7 @@ Internet Gateway
     →
 Internet
 
-Restore the NAT configuration after testing.
+If you deleted the NAT Gateway, recreate it, associate an Elastic IP, and verify both the public-subnet route to the Internet Gateway and the private-subnet route to the new NAT Gateway. If you only removed the private route, restore that route after testing.
 
 NAT Gateway creation and usage may incur AWS charges.
 
@@ -1685,6 +1651,21 @@ Do not create a Route 53 record unless a domain is available and DNS testing is 
 
 ---
 
+## 53.1 Optional Custom Domain and HTTPS
+
+The manual POC can use the default CloudFront URL and does not require a domain. If a custom hostname is required, configure it after the CloudFront distribution exists:
+
+1. Request a public ACM certificate for the hostname in **`us-east-1`**.
+2. Add the DNS validation CNAME supplied by ACM and wait until the certificate status is **Issued**. Keep the validation CNAME for certificate renewal.
+3. In CloudFront distribution settings, add the hostname under **Alternate domain name (CNAME)** and select the issued ACM certificate from `us-east-1`.
+4. Save and wait for the distribution status to become **Deployed**.
+5. In the domain's authoritative DNS service, create an A Alias record in Route 53 (or the equivalent supported alias with the DNS provider) pointing to the CloudFront distribution. The current CloudFormation template has IPv6 disabled, so do not add an AAAA alias unless IPv6 is enabled.
+6. Verify DNS resolution and test `https://<hostname>` in a browser. Confirm that the certificate matches the hostname.
+
+The ACM validation CNAME and the website alias record are different records. These settings are manual and are not managed by the current `03-cloudfront.yaml` template.
+
+---
+
 # 54. Step 48 – Final Validation Checklist
 
 Before declaring the manual deployment successful, verify all of the following.
@@ -1738,7 +1719,7 @@ Before declaring the manual deployment successful, verify all of the following.
 ## CloudWatch
 
 - CloudWatch Agent is running.
-- IFIS/EC2 namespace exists.
+- CWAgent namespace exists.
 - Memory metrics are available.
 - Root disk metrics are available.
 - Metrics are collected every 300 seconds.
@@ -1936,7 +1917,7 @@ Before deleting resources, understand the dependencies.
 
 Recommended cleanup order:
 
-1. Remove Route 53 records if created.
+1. Remove the custom-domain DNS alias if it should no longer point to this distribution; keep the ACM validation CNAME only if the certificate will remain in use.
 2. Disable or remove CloudFront WAF association.
 3. Delete CloudFront distribution.
 4. Wait until CloudFront distribution is disabled/deleted.
@@ -1949,10 +1930,10 @@ Recommended cleanup order:
 11. Terminate EC2.
 12. Delete EC2 Security Group.
 13. Delete IAM instance profile/role if no longer required.
-14. Delete NAT Gateway.
-15. Release the NAT Gateway Elastic IP.
-16. Delete private route table.
-17. Delete private subnet.
+14. Delete the NAT Gateway (there is no stop/start operation for a NAT Gateway). Wait until deletion completes.
+15. Release the Elastic IP only after the NAT Gateway no longer uses it and only if it is not needed elsewhere.
+16. Delete the private route table after removing its NAT route and subnet association as required.
+17. Delete the private subnet after all resources and interfaces in it have been removed.
 
 Do not delete the existing VPC if it is shared with other workloads.
 
@@ -2263,7 +2244,7 @@ See the following documents in this repository:
 - validation-checklist.md
 - troubleshooting.md
 
-CloudFormation templates:
+CloudFormation templates (paths relative to the repository root):
 
 - cloudformation/01-network.yaml
 - cloudformation/02-compute.yaml
