@@ -56,11 +56,6 @@ Resources:
     Properties:
       BackupVaultName: !Sub '${ProjectName}-${Environment}-backup-vault'
 
-      Tags:
-        Project: !Ref ProjectName
-        Environment: !Ref Environment
-        Owner: !Ref Owner
-
 
   BackupRole:
     Type: AWS::IAM::Role
