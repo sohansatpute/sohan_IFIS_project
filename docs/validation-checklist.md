@@ -1,719 +1,326 @@
 # IFIS POC – AWS Validation Checklist
 
-## 1. Purpose
+## 1. Purpose and rules
 
-This checklist is used to validate the IFIS AWS POC after deployment.
+Use this checklist after deployment to record whether each requirement has been verified. It covers networking, EC2, SSM, CloudWatch, CloudFront, WAF, AWS Backup, end-to-end behavior, failure scenarios, cost, and cleanup.
 
-The objective is to confirm that:
+**Do not mark a check as passed because the resource merely exists.** Run the test and record evidence. Use `Not tested`, `Pass`, `Fail`, or `Blocked` as appropriate. Resource IDs, CIDRs, Regions, and managed prefix-list IDs are POC-specific; verify them before reuse in another account or Region.
 
-- The network architecture is correct.
-- The private subnet is actually private.
-- NAT Gateway provides outbound connectivity.
-- The EC2 instance has no public IP.
-- EC2 is reachable through AWS Systems Manager Session Manager.
-- CloudWatch monitoring is working.
-- CloudFront can reach the private EC2 through VPC Origin.
-- AWS WAF is associated with CloudFront.
-- AWS Backup protects the EC2 instance.
-- Backup restore can be performed successfully.
-- The complete architecture works end to end.
+## 2. Test record
 
-This checklist can be reused when deploying the architecture into another AWS account or Region.
+- **Environment/account:** use a safe account alias or last four digits; avoid publishing full account IDs.
+- **Test date/time:** `YYYY-MM-DD HH:MM TZ`
+- **Tester:**
+- **Primary Region:** `ap-south-1` unless intentionally changed.
+- **CloudFront-scoped WAF Region:** `us-east-1`.
+- **Stack names:**
+- **CloudFront distribution ID/domain:**
+- **Known restrictions/blockers:**
 
+For each test, record status and evidence (command output, console state, metric timestamp, HTTP status, or backup job ID). Redact sensitive identifiers before sharing logs.
 
-## 2. Deployment Order
+## 3. Suggested validation order
 
-Validate the infrastructure in this order:
+1. Confirm AWS identity, Region, and stack status.
+2. Validate network, subnets, and route tables.
+3. Validate EC2, storage, and security groups.
+4. Validate User Data, HTTP service, SSM, and CloudWatch.
+5. Validate CloudFront VPC Origin and distribution.
+6. Validate WAF and its distribution association.
+7. Validate backup job and restore.
+8. Run end-to-end checks and approved failure scenarios.
+9. Review security, cost, cleanup, and documentation.
 
-1. Network
-2. Compute
-3. CloudFront VPC Origin
-4. CloudFront Distribution
-5. WAF
-6. AWS Backup
-7. End-to-end connectivity
-8. Monitoring
-9. Failure scenarios
-10. Backup restore
+Actual CloudFormation order depends on template dependencies and exports/imports. Confirm these before relying on a universal order. CloudFront-scoped WAF is deployed in `us-east-1`; the main network/compute resources in this POC are documented in `ap-south-1`.
 
+## 4. Identity and Region
 
-## 3. AWS Region Validation
+- [ ] **Status: Not tested** — `aws sts get-caller-identity` confirms the intended account/role.
+- [ ] **Status: Not tested** — Main infrastructure Region is correct (`ap-south-1` unless changed).
+- [ ] **Status: Not tested** — CloudFront-scoped WAF uses `us-east-1` and `Scope: CLOUDFRONT`.
 
-### Primary Region
+Evidence/notes:
 
-Expected:
+## 5. VPC and subnet validation
 
-- Region: `ap-south-1`
-- Location: Mumbai
+Documented POC reference values; verify them against the target account:
+- Existing VPC: `vpc-06900f62513eff63`
+- VPC CIDR: `172.31.0.0/16`
+- Public subnet for NAT: `subnet-0d6445bd9f644383b`
+- Public subnet CIDR: `172.31.0.0/20`, AZ `ap-south-1b`
+- Intended private subnet CIDR: `172.31.48.0/20`, AZ `ap-south-1b`
 
-### CloudFront WAF Region
+- [ ] **Status: Not tested** — Intended VPC exists and is available.
+- [ ] **Status: Not tested** — VPC and subnet CIDRs match the approved design and do not overlap.
+- [ ] **Status: Not tested** — Public subnet is in the intended VPC/AZ and its route table has `0.0.0.0/0 → Internet Gateway`.
+- [ ] **Status: Not tested** — Private subnet exists in the intended VPC/AZ.
+- [ ] **Status: Not tested** — Private subnet auto-assign public IPv4 is disabled.
+- [ ] **Status: Not tested** — Private subnet is associated with the intended private route table.
+- [ ] **Status: Not tested** — Private subnet has no direct default route to the Internet Gateway.
 
-Expected:
+Evidence/notes:
 
-- Region: `us-east-1`
+## 6. NAT Gateway and routing
 
-Important:
+- [ ] **Status: Not tested** — NAT Gateway is in the intended public subnet, has an Elastic IP, and state is `available`.
+- [ ] **Status: Not tested** — Private route table has `0.0.0.0/0 → NAT Gateway` when NAT is enabled.
+- [ ] **Status: Not tested** — Public route table has `0.0.0.0/0 → Internet Gateway`.
+- [ ] **Status: Not tested** — Private EC2 can reach required outbound destinations.
+- [ ] **Status: Not tested** — If NAT is disabled, the alternative required path (such as VPC endpoints) is configured and tested.
 
-AWS WAF for a CloudFront distribution must use:
+NAT enables outbound connections; it does not make private EC2 directly reachable by unsolicited inbound internet traffic. Do not remove routes during testing unless an approved test window and recovery plan exist.
 
-`Scope = CLOUDFRONT`
+Evidence/notes:
 
-and must be created in:
+## 7. EC2 instance and storage
 
-`us-east-1`
+- [ ] **Status: Not tested** — EC2 is in the intended private subnet, running, and passes status checks.
+- [ ] **Status: Not tested** — EC2 has no public IPv4 address.
+- [ ] **Status: Not tested** — Instance type matches the approved POC parameters.
+- [ ] **Status: Not tested** — Root volume is encrypted, uses `gp3`, and is 20 GiB unless intentionally changed.
+- [ ] **Status: Not tested** — IMDSv2 is required.
+- [ ] **Status: Not tested** — Termination protection matches the approved configuration.
+- [ ] **Status: Not tested** — Intended IAM role and instance profile are attached.
 
+Evidence/notes:
 
-## 4. VPC Validation
+## 8. Security group and access control
 
-### Check
+The source notes list CloudFront origin-facing managed prefix list `pl-9aa247f3`. Verify the correct prefix list ID for the target account/Region before relying on it.
 
-Confirm the existing VPC is:
+- [ ] **Status: Not tested** — Intended security group is attached to EC2.
+- [ ] **Status: Not tested** — TCP/80 ingress is restricted to approved source(s).
+- [ ] **Status: Not tested** — CloudFront managed prefix list was verified for this deployment.
+- [ ] **Status: Not tested** — Any VPC-CIDR HTTP rule exists only if required by the approved design.
+- [ ] **Status: Not tested** — No unnecessary inbound SSH rule exists.
+- [ ] **Status: Not tested** — Egress and network ACLs allow required connections and return traffic.
+- [ ] **Status: Not tested** — EC2 administration does not depend on a public IP.
 
-- VPC ID: `vpc-06900f62513eff63`
-- CIDR: `172.31.0.0/16`
+Do not open TCP/80 to `0.0.0.0/0` as a troubleshooting shortcut. Any temporary exception must be approved, time-limited, and removed.
 
-### Expected Result
+Evidence/notes:
 
-- VPC exists.
-- CIDR is correct.
-- VPC is available.
+## 9. User Data and web service
 
+- [ ] **Status: Not tested** — User Data/cloud-init completed without unresolved errors.
+- [ ] **Status: Not tested** — Required packages and agents installed successfully.
+- [ ] **Status: Not tested** — `amazon-ssm-agent` is running.
+- [ ] **Status: Not tested** — `amazon-cloudwatch-agent` is running.
+- [ ] **Status: Not tested** — HTTP service (`httpd` in the documented POC) is running.
+- [ ] **Status: Not tested** — `curl -I http://localhost` or equivalent local request succeeds.
+- [ ] **Status: Not tested** — Expected test page/content is returned locally.
 
-## 5. Public Subnet Validation
+If bootstrap downloads packages, NAT or an equivalent network path must be available during initialization.
 
-### Check
+Evidence/notes:
 
-Confirm the subnet used for the NAT Gateway is:
+## 10. Systems Manager Session Manager
 
-- Subnet ID: `subnet-0d6445bd9f644383b`
-- CIDR: `172.31.0.0/20`
-- Availability Zone: `ap-south-1b`
+- [ ] **Status: Not tested** — Instance appears as a managed node in the correct Region and is `Online`.
+- [ ] **Status: Not tested** — Required instance permissions are present, including `AmazonSSMManagedInstanceCore` or an approved equivalent.
+- [ ] **Status: Not tested** — SSM Agent is active and required endpoints are reachable through NAT or suitable VPC endpoints.
+- [ ] **Status: Not tested** — Session Manager shell opens without SSH, a public IP, or a bastion host.
 
-### Expected Result
+Evidence/notes:
 
-- Subnet is associated with the public route table.
-- Route table contains:
-  - `0.0.0.0/0`
-  - Target: Internet Gateway
-- NAT Gateway can be created in this subnet.
+## 11. CloudWatch metrics and alarms
 
+The source notes mention `IFIS/EC2` and `CWAgent`. Verify the actual namespace, metric names, and dimensions against the agent configuration and published metrics.
 
-## 6. Private Subnet Validation
+- [ ] **Status: Not tested** — CloudWatch Agent is running.
+- [ ] **Status: Not tested** — Expected metric namespace is visible.
+- [ ] **Status: Not tested** — Memory utilization metric is publishing.
+- [ ] **Status: Not tested** — Root filesystem disk utilization metric is publishing.
+- [ ] **Status: Not tested** — Metric dimensions match configured alarms.
+- [ ] **Status: Not tested** — Metrics arrive at the expected 300-second interval.
+- [ ] **Status: Not tested** — Required CPU, instance status, memory, and disk alarms target the intended instance/metrics.
+- [ ] **Status: Not tested** — Alarm state and missing-data behavior have been reviewed.
 
-### Check
+For disk monitoring, verify the actual metric name and path/dimensions (for example, `disk_used_percent` for `/`). Do not mark an alarm passed based only on its existence.
 
-Confirm the private subnet created by the POC is:
+Evidence/notes:
 
-- Subnet CIDR: `172.31.48.0/20`
-- Availability Zone: `ap-south-1b`
-- Public IP assignment: Disabled
+## 12. CloudFront VPC Origin
 
-### Expected Result
+- [ ] **Status: Not tested** — VPC Origin exists and is deployed/ready.
+- [ ] **Status: Not tested** — VPC Origin targets the intended private EC2 resource.
+- [ ] **Status: Not tested** — Origin protocol/port match the template and web service.
+- [ ] **Status: Not tested** — Security group permits intended origin-facing traffic.
+- [ ] **Status: Not tested** — EC2 does not require a public IP.
 
-- Subnet does not have a direct route to the Internet Gateway.
-- Default route points to NAT Gateway.
-- Resources launched in this subnet do not receive public IPv4 addresses automatically.
+The documented POC uses HTTP port 80 from CloudFront to the origin. Viewer HTTPS does not by itself mean CloudFront-to-origin traffic uses HTTPS.
 
+Evidence/notes:
 
-## 7. Private Route Table Validation
+## 13. CloudFront distribution
 
-### Check
+- [ ] **Status: Not tested** — Distribution exists, is enabled, and status is `Deployed`.
+- [ ] **Status: Not tested** — Origin points to the intended VPC Origin.
+- [ ] **Status: Not tested** — Viewer protocol policy redirects HTTP to HTTPS, as intended.
+- [ ] **Status: Not tested** — Allowed methods match the approved configuration.
+- [ ] **Status: Not tested** — Caching behavior matches the template (documented POC uses zero TTLs).
+- [ ] **Status: Not tested** — HTTP versions and IPv6 settings match the intended design.
+- [ ] **Status: Not tested** — Default CloudFront domain is reachable over HTTPS.
+- [ ] **Status: Not tested** — Expected page/content is returned through CloudFront.
 
-Confirm the private route table is associated with the private subnet.
+Evidence/notes:
 
-Expected route:
+## 14. End-to-end request test
 
-`0.0.0.0/0 → NAT Gateway`
+Test `https://<cloudfront-domain>`.
 
-### Expected Result
+- [ ] **Status: Not tested** — HTTPS viewer request succeeds.
+- [ ] **Status: Not tested** — HTTP redirects to HTTPS if configured to do so.
+- [ ] **Status: Not tested** — Expected application/test page is returned.
+- [ ] **Status: Not tested** — Request traverses the intended distribution and private origin.
+- [ ] **Status: Not tested** — Errors are traced to CloudFront, WAF, origin/network, or application based on evidence.
 
-The private subnet has outbound internet access through NAT Gateway.
+Expected path: `Client → CloudFront (WAF association) → VPC Origin → private EC2 → HTTP service`
 
-There must not be:
+Evidence/notes:
 
-`0.0.0.0/0 → Internet Gateway`
+## 15. AWS WAF
 
-for the private subnet.
+CloudFront-scoped WAF should use `Scope: CLOUDFRONT` in `us-east-1`.
 
+- [ ] **Status: Not tested** — Web ACL exists in `us-east-1` with scope `CLOUDFRONT`.
+- [ ] **Status: Not tested** — Web ACL is associated with the intended distribution.
+- [ ] **Status: Not tested** — Association appears in the deployed distribution configuration.
+- [ ] **Status: Not tested** — Default action and managed-rule behavior match the approved POC design.
+- [ ] **Status: Not tested** — Expected managed rule groups are present:
+  - `AWSManagedRulesCommonRuleSet`
+  - `AWSManagedRulesKnownBadInputsRuleSet`
+  - `AWSManagedRulesLinuxRuleSet`
+  - `AWSManagedRulesSQLiRuleSet`
+  - `AWSManagedRulesAmazonIpReputationList`
+- [ ] **Status: Not tested** — Sampled requests and CloudWatch metrics are visible where enabled.
+- [ ] **Status: Not tested** — Full WAF logging is separately configured if required.
 
-## 8. NAT Gateway Validation
+A Web ACL existing in AWS does not prove it protects the distribution. Sampled requests/metrics do not by themselves prove full request logging is configured.
 
-### Check
+Evidence/notes:
 
-Confirm the NAT Gateway is:
+## 16. AWS Backup plan and job
 
-- In the public subnet.
-- Associated with an Elastic IP.
-- State: `Available`.
+Documented schedule: `cron(0 15 ? * SUN *)` = 15:00 UTC Sunday (20:30 Sunday IST; 00:00 Monday JST). Confirm this is the intended schedule.
 
-### Expected Result
+- [ ] **Status: Not tested** — Backup vault and plan/rule exist.
+- [ ] **Status: Not tested** — EC2 is included in the backup selection.
+- [ ] **Status: Not tested** — Backup IAM role and permissions are correct.
+- [ ] **Status: Not tested** — Schedule matches approved requirements.
+- [ ] **Status: Not tested** — Retention is 30 days unless intentionally changed.
+- [ ] **Status: Not tested** — Backup job completed successfully.
+- [ ] **Status: Not tested** — Recovery point exists for the intended EC2 resource.
+- [ ] **Status: Not tested** — Vault retention and any `Retain` deletion policy implications are understood.
 
-Private EC2 can initiate outbound connections through the NAT Gateway.
+Evidence/notes:
 
-NAT Gateway does not allow unsolicited inbound internet connections to the private EC2.
+## 17. Backup restore test
 
+A recovery point existing is not proof that restore works.
 
-## 9. EC2 Validation
+- [ ] **Status: Not tested** — Recovery point is available.
+- [ ] **Status: Not tested** — Restore job completes successfully.
+- [ ] **Status: Not tested** — Restored resource launches with appropriate network/security settings.
+- [ ] **Status: Not tested** — SSM works on the restored instance where configured.
+- [ ] **Status: Not tested** — Restored application/service passes its health check.
+- [ ] **Status: Not tested** — Restored test resources are documented and cleaned up when no longer needed.
 
-### Check
+Evidence/notes:
 
-Confirm:
+## 18. Controlled failure scenarios
 
-- Instance state: `Running`
-- Instance is in the private subnet.
-- Public IPv4 address: None.
-- Private IPv4 address: Present.
-- Instance type matches the POC configuration.
-- Root volume is encrypted.
-- Root volume type is gp3.
-- Root volume size is 20 GB unless changed intentionally.
-- IMDSv2 is required.
-- Termination protection is enabled when appropriate.
+Run only in an approved test window, with recovery steps ready. Do not attempt to stop a NAT Gateway; if testing the NAT path, use an approved reversible route change or a separate test environment.
 
-### Expected Result
+### A. NAT/outbound path
+- [ ] **Status: Not tested** — Approved test demonstrates expected outbound impact when no alternative endpoint exists.
+- [ ] **Status: Not tested** — Original route is restored and outbound access re-verified.
 
-EC2 is not directly accessible from the public internet.
+### B. HTTP service
+- [ ] **Status: Not tested** — If approved, stopping the service causes the expected origin/request failure.
+- [ ] **Status: Not tested** — Service is restarted and local plus CloudFront access recovers.
 
+### C. Security group
+- [ ] **Status: Not tested** — If approved, removing the CloudFront origin-facing rule causes expected origin failure.
+- [ ] **Status: Not tested** — Original rule is restored and end-to-end access recovers.
 
-## 10. EC2 Security Group Validation
+### D. EC2 instance
+- [ ] **Status: Not tested** — If approved, stopping EC2 produces the expected origin failure.
+- [ ] **Status: Not tested** — EC2 is started, status checks pass, service is healthy, and CloudFront access recovers.
 
-### Inbound Rules
+Evidence, approval, test window, and rollback notes:
 
-Expected HTTP rule:
+## 19. Security acceptance
 
-- Protocol: TCP
-- Port: 80
-- Source: CloudFront managed prefix list
+- [ ] **Status: Not tested** — EC2 has no public IP.
+- [ ] **Status: Not tested** — No unnecessary SSH ingress exists; administration uses SSM.
+- [ ] **Status: Not tested** — Root volume is encrypted and IMDSv2 is required.
+- [ ] **Status: Not tested** — Security groups permit only approved inbound sources/ports.
+- [ ] **Status: Not tested** — Private subnet has no direct default route to an Internet Gateway.
+- [ ] **Status: Not tested** — WAF association and intended rules have been verified.
+- [ ] **Status: Not tested** — No temporary test rules/access remain.
 
-CloudFront managed prefix list for the current POC:
+Evidence/notes:
 
-`pl-9aa247f3`
+## 20. Cost and cleanup
 
-Expected VPC rule:
+Review expected charges for NAT Gateway and data processing, EC2/EBS, CloudFront, WAF, AWS Backup, CloudWatch, and Elastic IPs.
 
-- Protocol: TCP
-- Port: 80
-- Source: `172.31.0.0/16`
+- [ ] **Status: Not tested** — Cost-impacting resources are identified.
+- [ ] **Status: Not tested** — Required resources are intentionally retained; unused resources have a cleanup plan.
+- [ ] **Status: Not tested** — Stack dependencies and deletion order are reviewed.
+- [ ] **Status: Not tested** — Retained backup vaults/recovery points are accounted for.
+- [ ] **Status: Not tested** — Termination protection and deletion blockers are understood.
+- [ ] **Status: Not tested** — No resources were unintentionally removed from CloudFormation management.
 
-### Outbound Rules
+The source checklist suggests deletion order: Backup, WAF, CloudFront, Compute, Network. Confirm actual dependencies before deletion. Do not delete a shared/existing VPC unless explicitly intended and approved.
 
-Expected:
+Evidence/notes:
 
-- All traffic allowed outbound.
+## 21. Optional custom-domain validation
 
-### Expected Result
+Skip if using only the default `*.cloudfront.net` domain.
 
-HTTP access is limited to the intended sources.
+- [ ] **Status: Not tested** — ACM public certificate is `Issued` in `us-east-1`.
+- [ ] **Status: Not tested** — ACM DNS validation CNAME is present and retained for renewal.
+- [ ] **Status: Not tested** — CloudFront alternate domain name and certificate match the hostname.
+- [ ] **Status: Not tested** — Distribution is `Deployed` after changes.
+- [ ] **Status: Not tested** — DNS alias points to the correct distribution.
+- [ ] **Status: Not tested** — HTTPS loads and certificate matches the hostname.
+- [ ] **Status: Not tested** — AAAA alias is added only if IPv6 is enabled.
 
-The EC2 instance does not require an inbound SSH rule for administration.
+Evidence/notes:
 
+## 22. Documentation and handover
 
-## 11. CloudFront Managed Prefix List Validation
+- [ ] **Status: Not tested** — Architecture document reflects the deployed design.
+- [ ] **Status: Not tested** — CloudFormation guide reflects actual parameters and dependencies.
+- [ ] **Status: Not tested** — Manual deployment guide reflects actual settings.
+- [ ] **Status: Not tested** — Troubleshooting guide reflects current evidence and known issues.
+- [ ] **Status: Not tested** — Resource inventory and Regions are recorded securely.
+- [ ] **Status: Not tested** — Limitations are documented and not described as resolved without evidence.
+- [ ] **Status: Not tested** — Repository changes were reviewed and committed as intended.
 
-Confirm the AWS managed prefix list:
+Evidence/notes:
 
-`com.amazonaws.global.cloudfront.origin-facing`
+## 23. Final acceptance
 
-is used by the EC2 security group.
+Select one only after reviewing the evidence:
 
-Current POC prefix list:
+- [ ] **PASS** — All required acceptance tests passed.
+- [ ] **PASS WITH KNOWN LIMITATIONS** — Required core tests passed; remaining limitations are documented and accepted.
+- [ ] **FAILED** — One or more required tests failed.
+- [ ] **PENDING / BLOCKED** — Required tests are incomplete or an external blocker prevents validation.
 
-`pl-9aa247f3`
+**Overall result: `PENDING` until evidence supports a different status.**
 
-### Expected Result
+**Open failures/limitations:**
+1.
+2.
+3.
 
-CloudFront-origin traffic can reach the EC2 security group.
+**Approved by:**
+**Date:**
+**Evidence location:**
 
-Do not hardcode this prefix list ID when reusing the architecture in another Region/account without verifying the correct managed prefix list.
-
-
-## 12. IAM Role Validation
-
-EC2 instance role should include:
-
-- `AmazonSSMManagedInstanceCore`
-- `CloudWatchAgentServerPolicy`
-
-### Expected Result
-
-The EC2 instance can:
-
-- Register with Systems Manager.
-- Start a Session Manager session.
-- Send CloudWatch metrics.
-
-
-## 13. Systems Manager Validation
-
-Open:
-
-AWS Console → Systems Manager → Fleet Manager / Managed Nodes
-
-### Expected Result
-
-The EC2 instance appears as:
-
-`Online`
-
-### Session Test
-
-Start a Session Manager session.
-
-### Expected Result
-
-A shell session opens without using:
-
-- SSH
-- Public IP
-- Bastion host
-- Key pair
-
-
-## 14. EC2 User Data Validation
-
-Confirm the User Data completed successfully.
-
-Expected operations include:
-
-- `dnf update -y`
-- CloudWatch Agent installation
-- jq installation
-- unzip installation
-- wget installation
-- curl installation
-- Timezone configuration
-- SSM Agent enable/start
-- CloudWatch Agent configuration
-- CloudWatch Agent enable/start
-
-### Expected Result
-
-Both services are running:
-
-`amazon-ssm-agent`
-
-`amazon-cloudwatch-agent`
-
-The EC2 instance must have outbound connectivity through NAT Gateway or equivalent VPC endpoints while performing the initial installation.
-
-
-## 15. CloudWatch Validation
-
-Confirm CloudWatch Agent is running.
-
-Expected custom namespace:
-
-`IFIS/EC2`
-
-Expected metrics include:
-
-- Memory utilization
-- Root filesystem disk utilization
-
-Expected collection interval:
-
-`300 seconds`
-
-### Expected Result
-
-Metrics appear in CloudWatch.
-
-
-## 16. Web Server Validation
-
-Install a simple HTTP server for the POC if required.
-
-Example:
-
-`sudo dnf install -y httpd`
-
-Start it:
-
-`sudo systemctl enable --now httpd`
-
-Create a simple test page:
-
-`echo "IFIS POC EC2 Web Server" | sudo tee /var/www/html/index.html`
-
-Test locally from the EC2 instance:
-
-`curl http://localhost`
-
-### Expected Result
-
-The EC2 instance returns the test page.
-
-
-## 17. CloudFront VPC Origin Validation
-
-Confirm the VPC Origin:
-
-- Exists.
-- Status is deployed/available.
-- Targets the intended EC2 resource.
-- Uses HTTP port 80.
-- Uses the EC2 private resource rather than a public IP.
-
-### Expected Result
-
-CloudFront is able to use the private EC2 as an origin.
-
-The EC2 does not need a public IP.
-
-
-## 18. CloudFront Distribution Validation
-
-Confirm:
-
-- Distribution is enabled.
-- VPC Origin is configured.
-- Viewer protocol redirects HTTP to HTTPS.
-- HTTP/2 is enabled.
-- HTTP/3 is enabled where configured.
-- IPv6 setting matches the intended design.
-- Caching behavior matches the POC configuration.
-- Origin points to the VPC Origin.
-
-### Expected Result
-
-Opening the CloudFront distribution domain returns the EC2 web page.
-
-
-## 19. CloudFront End-to-End Test
-
-Test:
-
-`https://<cloudfront-domain>`
-
-### Expected Flow
-
-Client
-
-→ CloudFront
-
-→ WAF
-
-→ CloudFront VPC Origin
-
-→ Private EC2
-
-→ HTTP port 80
-
-
-### Expected Result
-
-The browser displays:
-
-`IFIS POC EC2 Web Server`
-
-
-## 20. WAF Validation
-
-Confirm the Web ACL:
-
-- Scope: `CLOUDFRONT`
-- Region: `us-east-1`
-- Associated with the CloudFront distribution.
-- Default action: Allow.
-- AWS Managed Rules are enabled.
-
-Expected managed rule groups:
-
-- AWSManagedRulesCommonRuleSet
-- AWSManagedRulesKnownBadInputsRuleSet
-- AWSManagedRulesLinuxRuleSet
-- AWSManagedRulesSQLiRuleSet
-- AWSManagedRulesAmazonIpReputationList
-
-### Expected Result
-
-CloudFront requests are inspected by AWS WAF before reaching the origin.
-
-
-## 21. WAF Logging / Metrics Validation
-
-Confirm:
-
-- Sampled requests are enabled.
-- CloudWatch metrics are enabled.
-- WAF metrics are visible.
-
-### Expected Result
-
-WAF activity can be monitored.
-
-
-## 22. AWS Backup Validation
-
-Confirm:
-
-- Backup vault exists.
-- Backup plan exists.
-- EC2 instance is selected.
-- Backup IAM role exists.
-- Weekly schedule is configured.
-- Retention is 30 days unless intentionally changed.
-
-Current schedule:
-
-`cron(0 15 ? * SUN *)`
-
-This corresponds to:
-
-`15:00 UTC Sunday`
-
-which is:
-
-`00:00 Monday JST`
-
-
-## 23. Backup Job Validation
-
-Wait for the scheduled backup or initiate an on-demand backup for testing.
-
-### Expected Result
-
-Backup job status:
-
-`Completed`
-
-A recovery point appears in the backup vault.
-
-
-## 24. Backup Restore Validation
-
-Perform a restore test when practical.
-
-### Expected Result
-
-AWS Backup can restore the EC2 resource.
-
-Validate:
-
-- Instance is created successfully.
-- Network configuration is appropriate.
-- Security group is appropriate.
-- Instance can start.
-- SSM connectivity works if the required network/IAM configuration is present.
-
-Document the restore result.
-
-
-## 25. Failure Test – NAT Gateway
-
-Test scenario:
-
-Temporarily remove or disable the private subnet's NAT route.
-
-### Expected Result
-
-Private EC2 loses outbound internet/AWS service connectivity unless equivalent VPC endpoints are configured.
-
-Potential impact:
-
-- SSM connectivity can fail.
-- CloudWatch Agent communication can fail.
-- Package downloads can fail.
-
-Restore the NAT route after testing.
-
-
-## 26. Failure Test – EC2 HTTP Service
-
-Stop the HTTP service.
-
-Example:
-
-`sudo systemctl stop httpd`
-
-### Expected Result
-
-CloudFront cannot successfully retrieve the web content from the origin.
-
-Start the service again:
-
-`sudo systemctl start httpd`
-
-### Expected Result
-
-CloudFront access recovers after the origin becomes healthy.
-
-
-## 27. Failure Test – Security Group
-
-Temporarily remove the CloudFront managed prefix-list HTTP rule.
-
-### Expected Result
-
-CloudFront should no longer be able to reach the EC2 origin.
-
-Restore the rule after testing.
-
-
-## 28. Failure Test – EC2 Instance
-
-Stop the EC2 instance.
-
-### Expected Result
-
-CloudFront origin requests fail while the instance is stopped.
-
-Start the instance again.
-
-### Expected Result
-
-After EC2 and the web service become healthy, CloudFront access should recover.
-
-
-## 29. Security Validation
-
-Confirm:
-
-- EC2 has no public IP.
-- No inbound SSH rule is required.
-- Administration is through SSM.
-- Root volume is encrypted.
-- IMDSv2 is required.
-- Security group allows only required inbound traffic.
-- CloudFront is the public entry point.
-- WAF protects CloudFront.
-- Private subnet has no direct Internet Gateway route.
-
-
-## 30. Cost Validation
-
-Before leaving the POC running, review:
-
-- NAT Gateway hourly cost.
-- NAT data processing.
-- EC2 instance cost.
-- EBS volume cost.
-- CloudFront usage.
-- WAF usage.
-- AWS Backup storage and backup activity.
-- CloudWatch usage.
-
-Delete resources when testing is complete if they are not required.
-
-
-## 31. Cleanup Validation
-
-After the POC is complete:
-
-### CloudFormation
-
-Delete stacks in dependency order:
-
-1. Backup
-2. WAF
-3. CloudFront
-4. Compute
-5. Network
-
-Note:
-
-CloudFront/WAF deletion may require additional time.
-
-### Manual Resources
-
-Check for:
-
-- Elastic IPs
-- NAT Gateways
-- VPC Origins
-- CloudFront distributions
-- Backup vaults
-- IAM roles
-- Security groups
-- EC2 instances
-- EBS volumes
-
-Do not delete resources manually if they are still managed by CloudFormation unless intentional.
-
-
-## 32. Final Acceptance Checklist
-
-### Network
-
-- [ ] Existing VPC identified.
-- [ ] Public subnet identified.
-- [ ] Private subnet created.
-- [ ] Private route table created.
-- [ ] NAT Gateway available.
-- [ ] Private subnet has NAT default route.
-- [ ] No direct Internet Gateway route from private subnet.
-
-### Compute
-
-- [ ] EC2 running.
-- [ ] EC2 in private subnet.
-- [ ] No public IP.
-- [ ] Encrypted gp3 root volume.
-- [ ] IMDSv2 required.
-- [ ] Termination protection configured as required.
-- [ ] SSM role attached.
-- [ ] CloudWatch role attached.
-
-### Security
-
-- [ ] Security group configured.
-- [ ] CloudFront managed prefix list configured.
-- [ ] No unnecessary SSH access.
-- [ ] WAF created in us-east-1.
-- [ ] WAF associated with CloudFront.
-
-### CloudFront
-
-- [ ] VPC Origin created.
-- [ ] VPC Origin deployed.
-- [ ] CloudFront distribution created.
-- [ ] CloudFront reaches private EC2.
-- [ ] HTTPS viewer access works.
-
-### Monitoring
-
-- [ ] CloudWatch Agent running.
-- [ ] Memory metrics available.
-- [ ] Disk metrics available.
-- [ ] EC2/CloudWatch alarms configured where required.
-
-### Backup
-
-- [ ] Backup vault created.
-- [ ] Backup plan created.
-- [ ] EC2 selected.
-- [ ] Backup job completed.
-- [ ] Recovery point exists.
-- [ ] Restore test completed where practical.
-
-### Documentation
-
-- [ ] Architecture documented.
-- [ ] Manual deployment documented.
-- [ ] CloudFormation deployment documented.
-- [ ] Validation checklist completed.
-- [ ] Troubleshooting guide updated.
-- [ ] Git repository updated.
-- [ ] Final AWS resource inventory documented.
-
-## 33. Validation Result
-
-Overall POC status:
-
-`PENDING`
-
-Update this value after testing:
-
-`PASS`
-
-or
-
-`PASS WITH KNOWN LIMITATIONS`
-
-or
-
-`FAILED`
-
-Record any limitations or failed tests in:
-
-`docs/troubleshooting.md`
+Record unresolved errors in `docs/troubleshooting.md`. Do not mark CloudFront or end-to-end validation as passed until the distribution is deployed and the request path has actually succeeded.
