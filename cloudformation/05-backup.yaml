@@ -135,7 +135,7 @@ Resources:
 
         Resources:
           - Fn::ImportValue:
-              !Sub '${ComputeStackName}-EC2InstanceArn'
+              !Sub '${ComputeStackName}-Ec2Arn'
 
 
 Outputs:
