@@ -1,6 +1,6 @@
-**# IFIS POC – CloudFormation Deployment Guide**
+# IFIS POC – CloudFormation Deployment Guide
 
-**## 1. Purpose**
+## 1. Purpose
 
 This document provides the step-by-step procedure for deploying the IFIS AWS POC architecture using AWS CloudFormation.
 
@@ -22,17 +22,17 @@ CloudFormation is the primary and recommended deployment method because it provi
 
 This guide is intended to be reusable for future AWS accounts, environments, and regions.
 
-**---**
+---
 
-**## 2. Architecture**
+## 2. Architecture
 
 The target architecture is:
 
-The Route 53 record and a custom domain are optional. The CloudFront distribution can be tested with its default \`\*.cloudfront.net\` domain without configuring Route 53 or a custom certificate.
+The Route 53 record and a custom domain are optional. The CloudFront distribution can be tested with its default `\*.cloudfront.net` domain without configuring Route 53 or a custom certificate.
 
     Internet
 
-        |
+|
 
         v
 
@@ -40,35 +40,35 @@ The Route 53 record and a custom domain are optional. The CloudFront distributio
 
         ^
 
-        |
+|
 
     Optional: Route 53 alias + custom domain
 
-        |
+|
 
         v
 
     AWS WAF
 
-        |
+|
 
         v
 
     CloudFront VPC Origin
 
-        |
+|
 
         v
 
     Private EC2
 
-        |
+|
 
         v
 
     NAT Gateway
 
-        |
+|
 
         v
 
@@ -78,43 +78,43 @@ Supporting services:
 
     Private EC2
 
-        |
+|
 
         +---- AWS Systems Manager
 
-        |
+|
 
         +---- CloudWatch
 
-        |
+|
 
         +---- AWS Backup
 
-**### Important traffic flows**
+### Important traffic flows
 
 CloudFront to EC2:
 
     Internet
 
-        |
+|
 
         v
 
     CloudFront
 
-        |
+|
 
         v
 
     WAF
 
-        |
+|
 
         v
 
     VPC Origin
 
-        |
+|
 
         v
 
@@ -124,19 +124,19 @@ EC2 outbound:
 
     Private EC2
 
-        |
+|
 
         v
 
     Private Route Table
 
-        |
+|
 
         v
 
     NAT Gateway
 
-        |
+|
 
         v
 
@@ -146,69 +146,66 @@ These are two different traffic paths.
 
 The NAT Gateway is not used for CloudFront-to-EC2 traffic.
 
-**---**
+---
 
-**## 3. CloudFormation Stacks**
+## 3. CloudFormation Stacks
 
 The project contains the following CloudFormation templates:
 
     cloudformation/
 
-    |
+|
 
     +-- 01-network.yaml
 
-    |
+|
 
     +-- 02-compute.yaml
 
-    |
+|
 
     +-- 03-cloudfront.yaml
 
-    |
+|
 
     +-- 04-waf.yaml
 
-    |
+|
 
     +-- 05-backup.yaml
 
-**### Stack responsibilities**
+### Stack responsibilities
 
-\| Template | Purpose | Region |
+| Template | Purpose | Region |
+|---|---|---|
+| 01-network.yaml | Private subnet, route table, NAT Gateway | ap-south-1 |
+| 02-compute.yaml | IAM, Security Group, EC2, CloudWatch | ap-south-1 |
+| 03-cloudfront.yaml | VPC Origin and CloudFront distribution | ap-south-1 |
+| 04-waf.yaml | CloudFront WAF | us-east-1 |
+| 05-backup.yaml | AWS Backup | ap-south-1 |
 
-\|---|---|---|
+---
 
-\| 01-network.yaml | Private subnet, route table, NAT Gateway | ap-south-1 |
-
-\| 02-compute.yaml | IAM, Security Group, EC2, CloudWatch | ap-south-1 |
-
-\| 03-cloudfront.yaml | VPC Origin and CloudFront distribution | ap-south-1 |
-
-\| 04-waf.yaml | CloudFront WAF | us-east-1 |
-
-\| 05-backup.yaml | AWS Backup | ap-south-1 |
-
-**---**
-
-**## 4. Deployment Dependency**
+## 4. Deployment Dependency
 
 The deployment dependencies are:
 
 ```text
 Existing VPC + existing public subnet
-        |
+|
+
         v
     01-network
-        |
+|
+
         v
     02-compute
        / \\
       v   v
   04-waf  05-backup
  (us-east-1) (ap-south-1)
-      |
+|
+
       v
   03-cloudfront
   (ap-south-1)
@@ -227,9 +224,9 @@ Backup and WAF can be deployed after Compute independently of each other. Deploy
 
 The CloudFront template accepts an empty `WebAclArn` for an initial distribution without WAF. If you choose that route, update/redeploy the CloudFront stack with the WAF ARN afterwards. Do not deploy a CloudFront-scoped WAF in `ap-south-1`; its stack must be in `us-east-1`.
 
-**---**
+---
 
-**## 5. AWS Regions**
+## 5. AWS Regions
 
 Main infrastructure:
 
@@ -243,43 +240,30 @@ The WAF template uses:
 
     Scope: CLOUDFRONT
 
-Therefore the WAF CloudFormation stack must be deployed in \`us-east-1\`.
+Therefore the WAF CloudFormation stack must be deployed in `us-east-1`.
 
-**---**
+---
 
-**## 6. Current POC Values**
+## 6. Current POC Values
 
 The current POC uses:
 
-\| Item | Value |
+| Item | Value |
+|---|---|
+| AWS Region | ap-south-1 |
+| WAF Region | us-east-1 |
+| VPC ID | vpc-06900f62513eff63a |
+| VPC CIDR | 172.31.0.0/16 |
+| NAT Public Subnet | subnet-0d6445bd9f644383b |
+| NAT Public Subnet CIDR | 172.31.0.0/20 |
+| Availability Zone | ap-south-1b |
+| Private Subnet CIDR | 172.31.48.0/20 |
+| CloudFront Prefix List | pl-9aa247f3 |
+| EC2 OS | Amazon Linux 2023 |
+| EC2 Type | t3a.small |
+| Application Port | TCP 80 |
 
-\|---|---|
-
-\| AWS Region | ap-south-1 |
-
-\| WAF Region | us-east-1 |
-
-\| VPC ID | vpc-06900f62513eff63a |
-
-\| VPC CIDR | 172.31.0.0/16 |
-
-\| NAT Public Subnet | subnet-0d6445bd9f644383b |
-
-\| NAT Public Subnet CIDR | 172.31.0.0/20 |
-
-\| Availability Zone | ap-south-1b |
-
-\| Private Subnet CIDR | 172.31.48.0/20 |
-
-\| CloudFront Prefix List | pl-9aa247f3 |
-
-\| EC2 OS | Amazon Linux 2023 |
-
-\| EC2 Type | t3a.small |
-
-\| Application Port | TCP 80 |
-
-**### Important**
+### Important
 
 These values are examples from the current POC environment only. They are not defaults to copy into a client account without verification.
 
@@ -305,41 +289,29 @@ Future deployments should supply:
 
 through CloudFormation parameters or deployment configuration.
 
-**### Exact replacement map for the example commands**
+### Exact replacement map for the example commands
 
-\| Example in a command | What to use for another environment | How to obtain/choose it |
+| Example in a command | What to use for another environment | How to obtain/choose it |
+|---|---|---|
+| `ap-south-1` | Your workload Region | Choose the Region approved by the client; keep the WAF stack in `us-east-1` because it has `Scope: CLOUDFRONT`. |
+| `vpc-06900f62513eff63a` | The client-approved VPC ID | Run the VPC discovery command in Section 11 and select the correct VPC. |
+| `172.31.0.0/16` | Actual VPC CIDR | Read `Vpcs[0].CidrBlock` from Section 11; pass it to the Compute stack's `VpcCidr` parameter. |
+| `subnet-0d6445bd9f644383b` | Existing public subnet ID in that VPC | Run the subnet discovery command in Section 12 and verify its route table points to an Internet Gateway. |
+| `ap-south-1b` | AZ of the selected public subnet | Derive it with the `AvailabilityZone` command in Section 12. |
+| `172.31.48.0/20` | Approved, non-overlapping private subnet CIDR | Review all existing VPC subnet CIDRs and associated VPC CIDRs with the network owner; choose an unused block. |
+| `pl-9aa247f3` | Managed CloudFront origin-facing prefix-list ID in your Region | Run Section 13; confirm the name is `com.amazonaws.global.cloudfront.origin-facing`. |
+| `IFIS-POC-network` etc. | Consistent, unique stack names for the deployment | Choose once; ensure Compute references the exact Network stack name, CloudFront and Backup reference the exact Compute stack name. IAM role names must not collide with existing roles. |
+| `IFIS-POC`, `dev`, `CLIENT-OWNER` | Client project, environment, owner/tag values | Use the client's naming/tagging policy. For templates 01–03, Environment must be `dev`, `test`, `uat`, or `prod`. The WAF/Backup templates have different defaults, so pass the intended values explicitly. |
+| `t3a.small`, `20` | Approved EC2 size and root volume GB | Choose based on workload and budget. The template only allows `t3.small`, `t3a.small`, `t3.medium`, or `t3a.medium`; it does not allow `t3.micro`. |
+| `cron(0 15 ? \* SUN \*)`, `30` | Approved weekly backup schedule in UTC and retention days | Confirm the required backup window/time zone and retention policy. This cron is 15:00 UTC Sunday (20:30 Sunday IST), with 30-day retention. |
 
-\|---|---|---|
+**\*\*Copy/paste rule:\*\*** The commands in Sections 14–22 are the current POC examples, not universal commands. After running the discovery steps, replace every listed POC value in each command before pressing Enter. Shell variables in Section 9–13 are there to help discover/hold values, but the existing example commands still show literal values for readability. Never paste placeholder strings such as `vpc-REPLACE...` into a deployment command.
 
-\| \`ap-south-1\` | Your workload Region | Choose the Region approved by the client; keep the WAF stack in \`us-east-1\` because it has \`Scope: CLOUDFRONT\`. |
+---
 
-\| \`vpc-06900f62513eff63a\` | The client-approved VPC ID | Run the VPC discovery command in Section 11 and select the correct VPC. |
+# 7. Prerequisites
 
-\| \`172.31.0.0/16\` | Actual VPC CIDR | Read \`Vpcs[0].CidrBlock\` from Section 11; pass it to the Compute stack's \`VpcCidr\` parameter. |
-
-\| \`subnet-0d6445bd9f644383b\` | Existing public subnet ID in that VPC | Run the subnet discovery command in Section 12 and verify its route table points to an Internet Gateway. |
-
-\| \`ap-south-1b\` | AZ of the selected public subnet | Derive it with the \`AvailabilityZone\` command in Section 12. |
-
-\| \`172.31.48.0/20\` | Approved, non-overlapping private subnet CIDR | Review all existing VPC subnet CIDRs and associated VPC CIDRs with the network owner; choose an unused block. |
-
-\| \`pl-9aa247f3\` | Managed CloudFront origin-facing prefix-list ID in your Region | Run Section 13; confirm the name is \`com.amazonaws.global.cloudfront.origin-facing\`. |
-
-\| \`IFIS-POC-network\` etc. | Consistent, unique stack names for the deployment | Choose once; ensure Compute references the exact Network stack name, CloudFront and Backup reference the exact Compute stack name. IAM role names must not collide with existing roles. |
-
-\| \`IFIS-POC\`, \`dev\`, \`CLIENT-OWNER\` | Client project, environment, owner/tag values | Use the client's naming/tagging policy. For templates 01–03, Environment must be \`dev\`, \`test\`, \`uat\`, or \`prod\`. The WAF/Backup templates have different defaults, so pass the intended values explicitly. |
-
-\| \`t3a.small\`, \`20\` | Approved EC2 size and root volume GB | Choose based on workload and budget. The template only allows \`t3.small\`, \`t3a.small\`, \`t3.medium\`, or \`t3a.medium\`; it does not allow \`t3.micro\`. |
-
-\| \`cron(0 15 ? \* SUN \*)\`, \`30\` | Approved weekly backup schedule in UTC and retention days | Confirm the required backup window/time zone and retention policy. This cron is 15:00 UTC Sunday (20:30 Sunday IST), with 30-day retention. |
-
-**\*\*Copy/paste rule:\*\*** The commands in Sections 14–22 are the current POC examples, not universal commands. After running the discovery steps, replace every listed POC value in each command before pressing Enter. Shell variables in Section 9–13 are there to help discover/hold values, but the existing example commands still show literal values for readability. Never paste placeholder strings such as \`vpc-REPLACE...\` into a deployment command.
-
-**---**
-
-**# 7. Prerequisites**
-
-**## 7.1 AWS Access**
+## 7.1 AWS Access
 
 The AWS account must have permissions to create and manage:
 
@@ -359,9 +331,9 @@ The AWS account must have permissions to create and manage:
 
 \- AWS Backup
 
-**---**
+---
 
-**## 7.2 Workstation**
+## 7.2 Workstation
 
 Install:
 
@@ -383,9 +355,9 @@ Verify AWS identity:
 
     aws sts get-caller-identity
 
-**---**
+---
 
-**# 8. Prepare Repository**
+# 8. Prepare Repository
 
 Clone the repository:
 
@@ -399,9 +371,9 @@ Check files:
 
     ls
 
-Find the CloudFormation templates. This guide's commands expect the five files to be together, either in \`cloudformation/\` or in the repository root. Run:
+Find the CloudFormation templates. This guide's commands expect the five files to be together, either in `cloudformation/` or in the repository root. Run:
 
-\`\`\`bash
+```bash
 
 if [ -f cloudformation/01-network.yaml ]; then
 
@@ -421,13 +393,13 @@ printf 'Using template directory: %s\n' "$TEMPLATE_DIR"
 
 ls "$TEMPLATE_DIR"/0\*.yaml
 
-\`\`\`
+```
 
-Confirm the directory contains \`01-network.yaml\`, \`02-compute.yaml\`, \`03-cloudfront.yaml\`, \`04-waf.yaml\`, and \`05-backup.yaml\`. If filenames or locations differ, correct the path/filenames before running any deployment command. Do not rename the uploaded copies with \`(2)\` suffixes; use the actual repository filenames.
+Confirm the directory contains `01-network.yaml`, `02-compute.yaml`, `03-cloudfront.yaml`, `04-waf.yaml`, and `05-backup.yaml`. If filenames or locations differ, correct the path/filenames before running any deployment command. Do not rename the uploaded copies with `(2)` suffixes; use the actual repository filenames.
 
-**---**
+---
 
-**# 9. Set and Verify AWS Regions (Git Bash on Windows)**
+# 9. Set and Verify AWS Regions (Git Bash on Windows)
 
 Run these commands in the same **Git Bash** window you will use for the rest of the deployment.
 
@@ -466,9 +438,9 @@ aws ec2 describe-vpcs --region "$AWS_REGION" --output table
 
 Main infrastructure uses `ap-south-1`. CloudFront-scoped WAF must be deployed in `us-east-1`, so always specify `--region us-east-1` for WAF commands. Do not change `AWS_REGION` to `us-east-1` for the main infrastructure.
 
-**---**
+---
 
-**# 10. Verify AWS Account**
+# 10. Verify AWS Account
 
 Run:
 
@@ -478,29 +450,29 @@ Verify the Account ID.
 
 Make sure the correct AWS account is being used before creating resources.
 
-**---**
+---
 
 **Git Bash variable rule:** If `echo "$AWS_REGION"` prints a blank line, stop and repeat Section 9 in the same terminal. If `echo "$VPC_ID"` or another variable prints blank or a placeholder, do not continue to deployment. Each `export NAME="..."` assignment must be completed using the value returned by the discovery command.
 
-**# 11. Discover and Verify the Existing VPC**
+# 11. Discover and Verify the Existing VPC
 
 The network template **\*\*does not create a VPC\*\***. Select the VPC that the client has approved for this deployment.
 
 List available VPCs in the selected Region:
 
-\`\`\`bash
+```bash
 
 aws ec2 describe-vpcs --region "$AWS_REGION" \\
 
-  --query 'Vpcs[].{VpcId\:VpcId,Cidr\:CidrBlock,IsDefault\:IsDefault,State\:State,Name\:Tags[?Key==\`Name\`]|[0].Value}' \\
+  --query 'Vpcs[].{VpcId\:VpcId,Cidr\:CidrBlock,IsDefault\:IsDefault,State\:State,Name\:Tags[?Key==`Name`]|[0].Value}' \\
 
   --output table
 
-\`\`\`
+```
 
 After choosing the intended VPC, set its ID. Replace the sample ID below with the value from the table:
 
-\`\`\`bash
+```bash
 
 export VPC_ID="vpc-REPLACE_WITH_CLIENT_VPC_ID"
 
@@ -512,31 +484,31 @@ export VPC_CIDR="$(aws ec2 describe-vpcs --vpc-ids "$VPC_ID" --region "$AWS_REGI
 
 echo "VPC_CIDR=$VPC_CIDR"
 
-\`\`\`
+```
 
 Do not continue if the VPC ID is wrong or the VPC is not available. If the VPC has multiple associated CIDR blocks, review all of them in the VPC console before selecting the private subnet CIDR.
 
-**# 12. Discover and Verify the Existing Public Subnet**
+# 12. Discover and Verify the Existing Public Subnet
 
 The network template places the NAT Gateway in an **\*\*existing public subnet\*\*** belonging to the VPC chosen above. List that VPC's subnets:
 
-\`\`\`bash
+```bash
 
 aws ec2 describe-subnets --region "$AWS_REGION" \\
 
   --filters "Name=vpc-id,Values=$VPC_ID" \\
 
-  --query 'Subnets[].{SubnetId\:SubnetId,Cidr\:CidrBlock,AZ\:AvailabilityZone,PublicIpOnLaunch\:MapPublicIpOnLaunch,State\:State,Name\:Tags[?Key==\`Name\`]|[0].Value}' \\
+  --query 'Subnets[].{SubnetId\:SubnetId,Cidr\:CidrBlock,AZ\:AvailabilityZone,PublicIpOnLaunch\:MapPublicIpOnLaunch,State\:State,Name\:Tags[?Key==`Name`]|[0].Value}' \\
 
   --output table
 
-\`\`\`
+```
 
-Choose a subnet only after confirming that its route table has \`0.0.0.0/0\` pointing to an Internet Gateway. \`MapPublicIpOnLaunch=true\` alone does not prove it is a working public subnet. In the VPC console, open **\*\*Route tables\*\***, find the subnet's associated route table (or the VPC main route table if no explicit association exists), and verify the Internet Gateway route.
+Choose a subnet only after confirming that its route table has `0.0.0.0/0` pointing to an Internet Gateway. `MapPublicIpOnLaunch=true` alone does not prove it is a working public subnet. In the VPC console, open **\*\*Route tables\*\***, find the subnet's associated route table (or the VPC main route table if no explicit association exists), and verify the Internet Gateway route.
 
 Set the selected subnet ID and discover its Availability Zone:
 
-\`\`\`bash
+```bash
 
 export PUBLIC_SUBNET_ID="subnet-REPLACE_WITH_CLIENT_PUBLIC_SUBNET_ID"
 
@@ -552,11 +524,11 @@ test "$PUBLIC_SUBNET_VPC" = "$VPC_ID" || { echo "ERROR: selected subnet is not i
 
 echo "AZ=$AZ"
 
-\`\`\`
+```
 
-Choose a private CIDR that does not overlap any existing VPC subnet or associated VPC CIDR. List existing subnet CIDRs and check them with the network administrator before using a value such as \`172.31.48.0/20\` (that value is only the POC example):
+Choose a private CIDR that does not overlap any existing VPC subnet or associated VPC CIDR. List existing subnet CIDRs and check them with the network administrator before using a value such as `172.31.48.0/20` (that value is only the POC example):
 
-\`\`\`bash
+```bash
 
 aws ec2 describe-subnets --region "$AWS_REGION" \\
 
@@ -566,17 +538,17 @@ aws ec2 describe-subnets --region "$AWS_REGION" \\
 
 export PRIVATE_SUBNET_CIDR="REPLACE_WITH_APPROVED_NON_OVERLAPPING_CIDR"
 
-\`\`\`
+```
 
 The template does not perform a complete overlap check for you. If NAT is disabled, verify that the private instance can reach required AWS services through VPC endpoints or another approved egress route before deploying.
 
-**---**
+---
 
-**# 13. Discover the CloudFront Origin-Facing Managed Prefix List**
+# 13. Discover the CloudFront Origin-Facing Managed Prefix List
 
 The Compute security group references the AWS-managed CloudFront origin-facing prefix list. Its ID can vary by Region; do not blindly reuse the POC ID.
 
-\`\`\`bash
+```bash
 
 aws ec2 describe-managed-prefix-lists --region "$AWS_REGION" \\
 
@@ -592,11 +564,11 @@ export CLOUDFRONT_PREFIX_LIST_ID="$(aws ec2 describe-managed-prefix-lists --regi
 
 echo "CLOUDFRONT_PREFIX_LIST_ID=$CLOUDFRONT_PREFIX_LIST_ID"
 
-\`\`\`
+```
 
-Confirm the returned name is \`com.amazonaws.global.cloudfront.origin-facing\` and the ID begins with \`pl-\`. If no entry is returned, stop and investigate the selected Region/permissions rather than copying the POC ID.
+Confirm the returned name is `com.amazonaws.global.cloudfront.origin-facing` and the ID begins with `pl-`. If no entry is returned, stop and investigate the selected Region/permissions rather than copying the POC ID.
 
-**---**
+---
 
 **Before every `create-stack` command:** check whether that stack name already exists in the specified Region. `create-stack` is only for a stack that does not already exist; if it exists, stop and follow a reviewed update procedure instead.
 
@@ -606,11 +578,11 @@ aws cloudformation describe-stacks --stack-name IFIS-POC-network --region "$AWS_
 
 If this returns a stack status, the stack already exists. If it returns a validation error saying the stack does not exist, verify the account, Region, and exact stack name before proceeding.
 
-**# 14. Network Stack**
+# 14. Network Stack
 
-\> **\*\*Important before deployment:\*\*** The \`create-stack\` commands below are fresh-deployment examples and contain current POC names/values. Follow Sections 9–13 to discover your account's values and replace each corresponding parameter. Do not run \`create-stack\` again for a stack that already exists; use a reviewed CloudFormation update/deploy procedure instead. NAT Gateway, CloudFront, WAF, EBS, and backups can incur charges.
+\> **\*\*Important before deployment:\*\*** The `create-stack` commands below are fresh-deployment examples and contain current POC names/values. Follow Sections 9–13 to discover your account's values and replace each corresponding parameter. Do not run `create-stack` again for a stack that already exists; use a reviewed CloudFormation update/deploy procedure instead. NAT Gateway, CloudFront, WAF, EBS, and backups can incur charges.
 
-**## 14.1 What It Creates**
+## 14.1 What It Creates
 
 The Network stack creates:
 
@@ -634,9 +606,9 @@ It uses:
 
 It does not create a new VPC.
 
-**---**
+---
 
-**## 14.2 Validate Template**
+## 14.2 Validate Template
 
 Run:
 
@@ -648,9 +620,9 @@ Run:
 
 The command should complete successfully.
 
-**---**
+---
 
-**## 14.3 Deploy Network**
+## 14.3 Deploy Network
 
 Example:
 
@@ -680,11 +652,11 @@ Example:
 
       --region ap-south-1
 
-For another environment, replace the values as described in Sections 9–13: \`ExistingVpcId\` = the selected VPC ID, \`ExistingPublicSubnetId\` = the selected public subnet ID, \`AvailabilityZone\` = that subnet's AZ, and \`PrivateSubnetCidr\` = your approved non-overlapping private CIDR. Also update stack name, Region, ProjectName, Environment, and Owner. These CloudFormation commands are examples for a fresh POC stack, not safe to rerun unchanged against an existing stack.
+For another environment, replace the values as described in Sections 9–13: `ExistingVpcId` = the selected VPC ID, `ExistingPublicSubnetId` = the selected public subnet ID, `AvailabilityZone` = that subnet's AZ, and `PrivateSubnetCidr` = your approved non-overlapping private CIDR. Also update stack name, Region, ProjectName, Environment, and Owner. These CloudFormation commands are examples for a fresh POC stack, not safe to rerun unchanged against an existing stack.
 
-**---**
+---
 
-**## 14.4 Wait for Network**
+## 14.4 Wait for Network
 
 Run:
 
@@ -708,9 +680,9 @@ Expected:
 
     CREATE_COMPLETE
 
-**---**
+---
 
-**## 14.5 Get Network Outputs**
+## 14.5 Get Network Outputs
 
 Run:
 
@@ -732,11 +704,11 @@ Record:
 
 \- NAT Gateway ID
 
-**---**
+---
 
-**# 15. Validate Network**
+# 15. Validate Network
 
-**## 15.1 Private Subnet**
+## 15.1 Private Subnet
 
 Verify:
 
@@ -754,9 +726,9 @@ Current POC:
 
     172.31.48.0/20
 
-**---**
+---
 
-**## 15.2 Private Route Table**
+## 15.2 Private Route Table
 
 Expected routes:
 
@@ -768,9 +740,9 @@ Expected routes:
 
     0.0.0.0/0         NAT Gateway
 
-**---**
+---
 
-**## 15.3 NAT Gateway**
+## 15.3 NAT Gateway
 
 Verify:
 
@@ -784,11 +756,11 @@ Verify:
 
 \- Public subnet has Internet Gateway route
 
-**---**
+---
 
-**# 16. Compute Stack**
+# 16. Compute Stack
 
-**## 16.1 What It Creates**
+## 16.1 What It Creates
 
 The Compute stack creates:
 
@@ -804,9 +776,9 @@ The Compute stack creates:
 
 The EC2 instance is launched in the private subnet created by the Network stack.
 
-**---**
+---
 
-**## 16.2 Validate Template**
+## 16.2 Validate Template
 
 Run:
 
@@ -816,9 +788,9 @@ Run:
 
       --region ap-south-1
 
-**---**
+---
 
-**## 16.3 Deploy Compute**
+## 16.3 Deploy Compute
 
 Run:
 
@@ -852,11 +824,11 @@ Run:
 
       --capabilities CAPABILITY_NAMED_IAM
 
-IMPORTANT: Replace \`VpcCidr\` with the actual VPC CIDR discovered in Section 11, and replace the network stack name/prefix-list ID if your names or Region differ. The command above shows the POC example values.
+IMPORTANT: Replace `VpcCidr` with the actual VPC CIDR discovered in Section 11, and replace the network stack name/prefix-list ID if your names or Region differ. The command above shows the POC example values.
 
-**---**
+---
 
-**## 16.4 Important AMI Parameter Note**
+## 16.4 Important AMI Parameter Note
 
 The Compute template already has a default Amazon Linux 2023 AMI parameter.
 
@@ -872,9 +844,9 @@ This can produce an incorrect value such as:
 
 Therefore, use the template default unless a different AMI is specifically required.
 
-**---**
+---
 
-**## 16.5 Wait for Compute**
+## 16.5 Wait for Compute
 
 Run:
 
@@ -898,9 +870,9 @@ Expected:
 
     CREATE_COMPLETE
 
-**---**
+---
 
-**## 16.6 Get Compute Outputs**
+## 16.6 Get Compute Outputs
 
 Run:
 
@@ -928,9 +900,9 @@ Record:
 
 \- EC2 ARN
 
-**---**
+---
 
-**# 17. Validate Compute**
+# 17. Validate Compute
 
 Verify:
 
@@ -948,15 +920,15 @@ Verify:
 
 \- CloudWatch is working
 
-**---**
+---
 
-**## 17.1 Verify SSM**
+## 17.1 Verify SSM
 
 Open:
 
     Systems Manager
 
-        |
+|
 
         v
 
@@ -964,21 +936,21 @@ Open:
 
 The EC2 instance should appear.
 
-**---**
+---
 
-**## 17.2 Verify Session Manager**
+## 17.2 Verify Session Manager
 
 Open:
 
     Systems Manager
 
-        |
+|
 
         v
 
     Session Manager
 
-        |
+|
 
         v
 
@@ -986,9 +958,9 @@ Open:
 
 Start a session with the EC2 instance.
 
-**---**
+---
 
-**## 17.3 Verify Application**
+## 17.3 Verify Application
 
 From Session Manager:
 
@@ -1002,9 +974,9 @@ Then:
 
 The application should respond.
 
-**---**
+---
 
-**# 18. CloudFront Account Verification**
+# 18. CloudFront Account Verification
 
 Before creating CloudFront resources, verify that the AWS account is permitted to create CloudFront resources.
 
@@ -1018,11 +990,11 @@ Do not immediately modify the CloudFormation template.
 
 Contact AWS Support and request CloudFront resource creation to be enabled.
 
-**---**
+---
 
-**# 19. WAF Stack**
+# 19. WAF Stack
 
-**## 19.1 Important Region**
+## 19.1 Important Region
 
 The WAF template uses:
 
@@ -1032,9 +1004,9 @@ Therefore deploy it in:
 
     us-east-1
 
-**---**
+---
 
-**## 19.2 Validate WAF**
+## 19.2 Validate WAF
 
 Run:
 
@@ -1044,9 +1016,9 @@ Run:
 
       --region us-east-1
 
-**---**
+---
 
-**## 19.3 Deploy WAF**
+## 19.3 Deploy WAF
 
 Run:
 
@@ -1066,9 +1038,9 @@ Run:
 
       --region us-east-1
 
-**---**
+---
 
-**## 19.4 Wait for WAF**
+## 19.4 Wait for WAF
 
 Run:
 
@@ -1092,9 +1064,9 @@ Expected:
 
     CREATE_COMPLETE
 
-**---**
+---
 
-**## 19.5 Get WAF ARN**
+## 19.5 Get WAF ARN
 
 Run:
 
@@ -1112,11 +1084,11 @@ Record:
 
 This ARN is used for the CloudFront distribution.
 
-**---**
+---
 
-**# 20. CloudFront Stack**
+# 20. CloudFront Stack
 
-**## 20.1 Validate Template**
+## 20.1 Validate Template
 
 Run:
 
@@ -1126,9 +1098,9 @@ Run:
 
       --region ap-south-1
 
-**---**
+---
 
-**## 20.2 Deploy CloudFront**
+## 20.2 Deploy CloudFront
 
 First retrieve the WAF ARN from the WAF stack in `us-east-1`:
 
@@ -1161,9 +1133,9 @@ aws cloudformation create-stack \
 
 Replace the stack names and tag values if you chose different values earlier. The `ComputeStackName` value must exactly match the deployed Compute stack. Do not run `create-stack` if the CloudFront stack already exists. If the account returns `Your account must be verified before you can add new CloudFront resources`, stop and contact AWS Support; do not keep retrying or change the template just to bypass the account restriction.
 
-**---**
+---
 
-**## 20.3 Wait for CloudFront**
+## 20.3 Wait for CloudFront
 
 Run:
 
@@ -1187,9 +1159,9 @@ Expected:
 
     CREATE_COMPLETE
 
-**---**
+---
 
-**## 20.4 Get CloudFront Outputs**
+## 20.4 Get CloudFront Outputs
 
 Run:
 
@@ -1209,9 +1181,9 @@ Record:
 
 \- CloudFront Domain
 
-**---**
+---
 
-**# 21. Validate CloudFront**
+# 21. Validate CloudFront
 
 Verify:
 
@@ -1233,25 +1205,25 @@ Verify:
 
 \- CloudFront can reach EC2
 
-**---**
+---
 
-**## 21.1 Optional Custom Domain (Manual Configuration)**
+## 21.1 Optional Custom Domain (Manual Configuration)
 
-The CloudFront template currently uses the default CloudFront certificate and does not define \`Aliases\` or a custom ACM certificate parameter. Leave the template unchanged for the default \`https\://\<distribution-domain>.cloudfront.net\` URL.
+The CloudFront template currently uses the default CloudFront certificate and does not define `Aliases` or a custom ACM certificate parameter. Leave the template unchanged for the default `https\://\<distribution-domain>.cloudfront.net` URL.
 
 If a client wants a custom domain, complete these steps manually after the distribution exists:
 
-1\. Choose the hostname, for example \`www\.example.com\`, and confirm control of its DNS zone.
+1\. Choose the hostname, for example `www\.example.com`, and confirm control of its DNS zone.
 
-2\. In **\*\*ACM in \`us-east-1\`\*\***, request a public certificate for the exact hostname (and any required additional names).
+2\. In **\*\*ACM in `us-east-1`\*\***, request a public certificate for the exact hostname (and any required additional names).
 
 3\. Complete ACM DNS validation by adding the CNAME record ACM provides. Keep this validation CNAME in DNS so ACM can renew the certificate.
 
-4\. In CloudFront, open the distribution and edit its settings. Add the hostname under **\*\*Alternate domain name (CNAME)\*\*** and select the issued ACM certificate from \`us-east-1\`. Save the change and wait until the distribution status is **\*\*Deployed\*\***.
+4\. In CloudFront, open the distribution and edit its settings. Add the hostname under **\*\*Alternate domain name (CNAME)\*\*** and select the issued ACM certificate from `us-east-1`. Save the change and wait until the distribution status is **\*\*Deployed\*\***.
 
 5\. In the authoritative DNS service, create a Route 53 **\*\*A – Alias\*\*** record (or the equivalent supported alias at the DNS provider) pointing the hostname to the CloudFront distribution. Create an AAAA Alias only if IPv6 is enabled on the distribution; the current template sets IPv6 to disabled.
 
-6\. Verify DNS resolution and open \`https\://\<hostname>\` in a browser. Confirm the certificate hostname and HTTPS response.
+6\. Verify DNS resolution and open `https\://\<hostname>` in a browser. Confirm the certificate hostname and HTTPS response.
 
 Important distinctions:
 
@@ -1261,13 +1233,13 @@ Important distinctions:
 
 \- DNS propagation and CloudFront deployment can take time. Do not treat a saved configuration as ready until CloudFront reports **\*\*Deployed\*\*** and HTTPS is verified.
 
-\- These are manual console steps; they are not created by the current \`03-cloudfront.yaml\` template. A later CloudFormation change would be needed to manage aliases/certificate association as code.
+\- These are manual console steps; they are not created by the current `03-cloudfront.yaml` template. A later CloudFormation change would be needed to manage aliases/certificate association as code.
 
-**---**
+---
 
-**# 22. Backup Stack**
+# 22. Backup Stack
 
-**## 22.1 What It Creates**
+## 22.1 What It Creates
 
 The Backup stack creates:
 
@@ -1281,9 +1253,9 @@ The Backup stack creates:
 
 The selection imports the EC2 ARN from the Compute stack.
 
-**---**
+---
 
-**## 22.2 Validate Template**
+## 22.2 Validate Template
 
 Run:
 
@@ -1293,9 +1265,9 @@ Run:
 
       --region ap-south-1
 
-**---**
+---
 
-**## 22.3 Deploy Backup**
+## 22.3 Deploy Backup
 
 Run:
 
@@ -1327,9 +1299,9 @@ Run:
 
       --capabilities CAPABILITY_NAMED_IAM
 
-**---**
+---
 
-**## 22.4 Wait for Backup**
+## 22.4 Wait for Backup
 
 Run:
 
@@ -1353,9 +1325,9 @@ Expected:
 
     CREATE_COMPLETE
 
-**---**
+---
 
-**# 23. Backup Validation**
+# 23. Backup Validation
 
 Verify:
 
@@ -1373,9 +1345,9 @@ Verify:
 
 \- Recovery point exists
 
-**---**
+---
 
-**## 23.1 Backup Schedule**
+## 23.1 Backup Schedule
 
 The current schedule is:
 
@@ -1387,45 +1359,45 @@ This means:
 
 For India Standard Time (IST, UTC+05:30), this is Sunday 20:30 IST. It is Monday 00:00 in Japan Standard Time (JST, UTC+09:00), so do not copy the JST conversion for an India-based schedule.
 
-AWS Backup interprets this cron expression in UTC. Confirm the desired local weekday and time with the client, then convert that time to UTC before changing \`BackupScheduleCron\`.
+AWS Backup interprets this cron expression in UTC. Confirm the desired local weekday and time with the client, then convert that time to UTC before changing `BackupScheduleCron`.
 
 A successful CloudFormation stack deployment does not prove that a backup has completed. Check the AWS Backup job status and confirm that a recovery point exists. Perform a restore test in an isolated environment before relying on backups.
 
-**---**
+---
 
-**# 24. End-to-End Validation**
+# 24. End-to-End Validation
 
-**## 24.1 Application Path**
+## 24.1 Application Path
 
 Test:
 
     Browser
 
-        |
+|
 
         v
 
     CloudFront
 
-        |
+|
 
         v
 
     WAF
 
-        |
+|
 
         v
 
     VPC Origin
 
-        |
+|
 
         v
 
     Private EC2
 
-        |
+|
 
         v
 
@@ -1435,7 +1407,7 @@ Open:
 
 Get the distribution domain from the CloudFront stack:
 
-\`\`\`bash
+```bash
 
 aws cloudformation describe-stacks \\
 
@@ -1445,15 +1417,15 @@ aws cloudformation describe-stacks \\
 
   --output text
 
-\`\`\`
+```
 
-Open \`https\://\` followed by the returned domain name. Replace the stack name/Region in the lookup if yours differs.
+Open `https\://` followed by the returned domain name. Replace the stack name/Region in the lookup if yours differs.
 
 The application should respond.
 
-**---**
+---
 
-**## 24.2 EC2 Outbound Path**
+## 24.2 EC2 Outbound Path
 
 From Session Manager:
 
@@ -1467,29 +1439,29 @@ Expected path:
 
     EC2
 
-        |
+|
 
         v
 
     Private Route Table
 
-        |
+|
 
         v
 
     NAT Gateway
 
-        |
+|
 
         v
 
     Internet
 
-**---**
+---
 
-**# 25. Failure Testing**
+# 25. Failure Testing
 
-**## 25.1 EC2 Failure**
+## 25.1 EC2 Failure
 
 For a POC, stop the EC2 instance.
 
@@ -1497,13 +1469,13 @@ Expected:
 
     CloudFront
 
-        |
+|
 
         v
 
     VPC Origin
 
-        |
+|
 
         X
 
@@ -1513,17 +1485,17 @@ The application should become unavailable.
 
 Start the EC2 instance again.
 
-**---**
+---
 
-**## 25.2 NAT Failure**
+## 25.2 NAT Failure
 
 NAT Gateway failure affects outbound traffic from the private subnet.
 
 It does not represent the CloudFront-to-EC2 traffic path.
 
-**---**
+---
 
-**## 25.3 Backup Restore Test**
+## 25.3 Backup Restore Test
 
 Perform a restore test from a recovery point.
 
@@ -1541,11 +1513,11 @@ Validate:
 
 Record the result.
 
-**---**
+---
 
-**# 26. Troubleshooting**
+# 26. Troubleshooting
 
-**## 26.1 CloudFormation Failure**
+## 26.1 CloudFormation Failure
 
 Check stack events:
 
@@ -1563,9 +1535,9 @@ Look for:
 
 The first failure is normally the most useful event.
 
-**---**
+---
 
-**## 26.2 CloudFront Account Verification Failure**
+## 26.2 CloudFront Account Verification Failure
 
 Error:
 
@@ -1581,9 +1553,9 @@ Action:
 
 \- Do not assume the CloudFormation template is invalid.
 
-**---**
+---
 
-**## 26.3 EC2 SSM Failure**
+## 26.3 EC2 SSM Failure
 
 Check:
 
@@ -1601,9 +1573,9 @@ Check:
 
 7\. AWS service connectivity
 
-**---**
+---
 
-**## 26.4 CloudFront Failure**
+## 26.4 CloudFront Failure
 
 Check:
 
@@ -1621,9 +1593,9 @@ Check:
 
 7\. WAF is not blocking valid traffic
 
-**---**
+---
 
-**## 26.5 Backup Failure**
+## 26.5 Backup Failure
 
 Check:
 
@@ -1639,9 +1611,9 @@ Check:
 
 6\. Backup vault
 
-**---**
+---
 
-**# 27. Cleanup**
+# 27. Cleanup
 
 POC resources may be deleted after testing to control AWS cost. NAT Gateway, EC2/EBS, CloudFront, WAF, CloudWatch usage, data transfer, and AWS Backup storage/recovery points can incur charges. Review the account's current pricing before deployment.
 
@@ -1651,19 +1623,19 @@ Recommended deletion order:
 
     CloudFront
 
-        |
+|
 
         v
 
     Backup
 
-        |
+|
 
         v
 
     Compute
 
-        |
+|
 
         v
 
@@ -1673,9 +1645,9 @@ The WAF can be deleted separately from:
 
     us-east-1
 
-**---**
+---
 
-**## 27.1 CloudFront Stack**
+## 27.1 CloudFront Stack
 
 Delete:
 
@@ -1693,9 +1665,9 @@ Wait:
 
       --region ap-south-1
 
-**---**
+---
 
-**## 27.2 WAF Stack**
+## 27.2 WAF Stack
 
 Delete:
 
@@ -1713,9 +1685,9 @@ Wait:
 
       --region us-east-1
 
-**---**
+---
 
-**## 27.3 Backup Stack**
+## 27.3 Backup Stack
 
 Delete:
 
@@ -1735,9 +1707,9 @@ Therefore deleting the CloudFormation stack may leave the Backup Vault behind. R
 
 The retained vault must be reviewed separately if the objective is complete POC cleanup. Confirm retention/compliance requirements before deleting recovery points, and delete the vault only after it is empty and no longer required.
 
-**---**
+---
 
-**## 27.4 Compute Stack**
+## 27.4 Compute Stack
 
 Before deleting the Compute stack, remember that EC2 termination protection may prevent deletion.
 
@@ -1745,7 +1717,7 @@ If required, disable termination protection:
 
 First get the EC2 instance ID from the Compute stack:
 
-\`\`\`bash
+```bash
 
 aws cloudformation describe-stacks \\
 
@@ -1755,11 +1727,11 @@ aws cloudformation describe-stacks \\
 
   --output text
 
-\`\`\`
+```
 
 Then copy the returned ID into the following command (remove the angle brackets):
 
-\`\`\`bash
+```bash
 
 aws ec2 modify-instance-attribute \\
 
@@ -1769,7 +1741,7 @@ aws ec2 modify-instance-attribute \\
 
   --region ap-south-1
 
-\`\`\`
+```
 
 Then:
 
@@ -1787,9 +1759,9 @@ Wait:
 
       --region ap-south-1
 
-**---**
+---
 
-**## 27.5 Network Stack**
+## 27.5 Network Stack
 
 Delete:
 
@@ -1817,9 +1789,9 @@ Verify that:
 
 \- Private route table is deleted
 
-**---**
+---
 
-**# 28. Reusable Deployment**
+# 28. Reusable Deployment
 
 For another environment:
 
@@ -1855,11 +1827,11 @@ Do not modify the templates simply because the VPC ID or subnet ID changes.
 
 Pass environment-specific values as parameters.
 
-**---**
+---
 
-**# 29. Final CloudFormation Validation Checklist**
+# 29. Final CloudFormation Validation Checklist
 
-**## Network**
+## Network
 
 \- [ ] Network template validated
 
@@ -1873,7 +1845,7 @@ Pass environment-specific values as parameters.
 
 \- [ ] NAT route correct
 
-**## Compute**
+## Compute
 
 \- [ ] Compute template validated
 
@@ -1895,7 +1867,7 @@ Pass environment-specific values as parameters.
 
 \- [ ] Application working
 
-**## WAF**
+## WAF
 
 \- [ ] WAF template validated
 
@@ -1909,7 +1881,7 @@ Pass environment-specific values as parameters.
 
 \- [ ] WAF associated with CloudFront
 
-**## CloudFront**
+## CloudFront
 
 \- [ ] CloudFront template validated
 
@@ -1925,7 +1897,7 @@ Pass environment-specific values as parameters.
 
 \- [ ] Application reachable
 
-**## Backup**
+## Backup
 
 \- [ ] Backup template validated
 
@@ -1943,9 +1915,9 @@ Pass environment-specific values as parameters.
 
 \- [ ] Restore tested
 
-**---**
+---
 
-**# 30. Related Documentation**
+# 30. Related Documentation
 
 Architecture:
 
@@ -1967,9 +1939,9 @@ CloudFormation templates:
 
     cloudformation/
 
-**---**
+---
 
-**# 31. Document Ownership**
+# 31. Document Ownership
 
 Project:
 
